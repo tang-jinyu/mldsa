@@ -1,8 +1,14 @@
 `timescale 1ns/1ps
 `default_nettype none
 
+import mldsa_fused_bank_map_pkg::*;
+
 module mldsa_top_wrapper #(
+`ifdef MLDSA_TARGET_FPGA
     parameter int BANKS = 65
+`else
+    parameter int BANKS = MLDSA_FUSED_BANKS_65
+`endif
 ) (
     input  wire                         clk,
     input  wire                         rst_n,

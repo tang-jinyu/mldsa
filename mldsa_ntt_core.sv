@@ -368,8 +368,12 @@ module mldsa_ntt_core #(
                     hold_valid_q     <= 1'b0;
                     if (stage_idx_q == (NTT_STAGES-1)) begin
                         if (op_inv_q) begin
+`ifdef MLDSA_NTT_FOLD_INTT_HALF
+                            st <= S_DONE;
+`else
                             scale_issue_idx_q <= 9'd0;
                             st <= S_SCALE_ISSUE;
+`endif
                         end else begin
                             st <= S_DONE;
                         end

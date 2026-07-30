@@ -14,7 +14,7 @@ module mldsa_byte_store_async #(
     input  wire [ADDR_W-1:0] rd_addr,
     output logic [7:0]       rd_data
 );
-`ifdef SYNTHESIS
+`ifdef MLDSA_TARGET_ASIC
     localparam int BYTES_PER_WORD = 6;
     localparam int WORDS = (DEPTH + BYTES_PER_WORD - 1) / BYTES_PER_WORD;
     localparam int WORDS_PER_BANK = 512;
@@ -96,14 +96,11 @@ module mldsa_byte_store_async #(
         endcase
     end
 `else
-    logic [7:0] mem [0:DEPTH-1];
+    (* ram_style = "block" *) logic [7:0] mem [0:DEPTH-1];
 
     always_ff @(posedge clk) begin
         if (wr_en) mem[wr_addr] <= wr_data;
-    end
-
-    always_comb begin
-        rd_data = mem[rd_addr];
+        rd_data <= mem[rd_addr];
     end
 `endif
 endmodule
@@ -412,7 +409,7 @@ module mldsa_sp_sram64x24_wrapper (
     input  wire [5:0]               dbg_addr,
     output logic [MLDSA_COEFF_W-1:0] dbg_data
 );
-`ifdef SYNTHESIS
+`ifdef MLDSA_TARGET_ASIC
     logic        macro_rd_en;
     logic        macro_rd_is_dbg_q;
     logic [7:0]  macro_rd_addr;

@@ -128,6 +128,18 @@ module mldsa_bfu_pipe (
     logic                     inv_d1;
     logic                     inv_d2;
 
+`ifdef MLDSA_NTT_FOLD_INTT_HALF
+    function automatic logic [MLDSA_COEFF_W-1:0] modq_half(
+        input logic [MLDSA_COEFF_W-1:0] x
+    );
+        logic [MLDSA_COEFF_W-1:0] shifted;
+        begin
+            shifted = x >> 1;
+            modq_half = x[0] ? modq_add(shifted, 24'd4190209) : shifted;
+        end
+    endfunction
+`endif
+
     assign in_ready = mul_in_ready;
     assign mul_b    = inverse ? modq_sub(a_in, b_in) : b_in;
 
@@ -172,8 +184,13 @@ module mldsa_bfu_pipe (
             out_valid <= mul_out_valid;
             if (mul_out_valid) begin
                 if (inv_d2) begin
+`ifdef MLDSA_NTT_FOLD_INTT_HALF
+                    a_out <= modq_half(modq_add(a_d2, b_d2));
+                    b_out <= modq_half(mul_result);
+`else
                     a_out <= modq_add(a_d2, b_d2);
                     b_out <= mul_result;
+`endif
                 end else begin
                     a_out <= modq_add(a_d2, mul_result);
                     b_out <= modq_sub(a_d2, mul_result);
