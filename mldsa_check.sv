@@ -1,0 +1,163 @@
+`timescale 1ns/1ps
+`default_nettype none
+
+import mldsa_pkg::*;
+
+module mldsa_check #(
+    parameter int MAX_STALL_CYCLES = 0
+) (
+    input  wire                         clk,
+    input  wire                         rst_n,
+    input  wire                         start,
+    input  wire [1:0]                   mode,
+    input  wire [15:0]                  item_count,
+    input  wire [MLDSA_COEFF_W-1:0]     limit_value,
+    input  wire [MLDSA_COEFF_W-1:0]     data_a,
+    input  wire [MLDSA_COEFF_W-1:0]     data_b,
+    input  wire                         data_valid,
+    output logic                        data_ready,
+    output logic                        pass,
+    output logic [15:0]                 fail_index,
+    output logic [15:0]                 accum_value,
+    output logic                        busy,
+    output logic                        done,
+    output logic [2:0]                  state_dbg
+);
+
+    typedef enum logic [1:0] {S_IDLE, S_RUN, S_DONE} state_e;
+    state_e st;
+    localparam logic [31:0] MAX_STALL_CYCLES_U32 = MAX_STALL_CYCLES;
+
+    logic [1:0] mode_q;
+    logic [15:0] item_count_q;
+    logic [MLDSA_COEFF_W-1:0] limit_q;
+    logic [15:0] index_q;
+    logic [31:0] stall_count_q;
+
+    function automatic integer signed abs_centered(input logic [MLDSA_COEFF_W-1:0] coeff_value);
+        integer signed centered;
+        begin
+            centered = center_modq(coeff_value);
+            if (centered < 0) abs_centered = -centered;
+            else abs_centered = centered;
+        end
+    endfunction
+
+    always_comb begin
+        data_ready = (st == S_RUN);
+        state_dbg = {1'b0, st};
+    end
+
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            st          <= S_IDLE;
+            mode_q      <= MLDSA_CHECK_NORM;
+            item_count_q <= 16'd0;
+            limit_q     <= '0;
+            index_q     <= 16'd0;
+            pass        <= 1'b1;
+            fail_index  <= 16'hFFFF;
+            accum_value <= 16'd0;
+            stall_count_q <= 32'd0;
+            busy        <= 1'b0;
+            done        <= 1'b0;
+        end else begin
+            done <= 1'b0;
+            unique case (st)
+                S_IDLE: begin
+                    busy <= 1'b0;
+                    if (start) begin
+                        mode_q       <= mode;
+                        item_count_q <= item_count;
+                        limit_q      <= limit_value;
+                        index_q      <= 16'd0;
+                        pass         <= 1'b1;
+                        fail_index   <= 16'hFFFF;
+                        accum_value  <= 16'd0;
+                        stall_count_q <= 32'd0;
+                        busy         <= 1'b1;
+                        st           <= (item_count == 16'd0) ? S_DONE : S_RUN;
+                    end
+                end
+                S_RUN: begin
+                    if (data_valid) begin
+                        integer signed norm_value;
+                        integer signed limit_signed;
+                        logic [15:0] next_accum;
+                        stall_count_q <= 32'd0;
+                        norm_value = 0;
+                        limit_signed = $signed({8'd0, limit_q});
+                        next_accum = accum_value;
+                        unique case (mode_q)
+                            MLDSA_CHECK_NORM: begin
+                                norm_value = abs_centered(data_a);
+                                if (((data_a >= MLDSA_Q_COEFF) || (norm_value >= limit_signed)) && pass) begin
+                                    pass <= 1'b0;
+                                    fail_index <= index_q;
+                                end
+                            end
+                            MLDSA_CHECK_HINTCNT: begin
+                                next_accum = accum_value + ((data_a != '0) ? 16'd1 : 16'd0);
+                                accum_value <= next_accum;
+                                if (next_accum > limit_q && pass) begin
+                                    pass <= 1'b0;
+                                    fail_index <= index_q;
+                                end
+                            end
+                            MLDSA_CHECK_BYTEEQ: begin
+                                if (data_a[7:0] != data_b[7:0] && pass) begin
+                                    pass <= 1'b0;
+                                    fail_index <= index_q;
+                                end
+                            end
+                            MLDSA_CHECK_COEFFEQ: begin
+                                if (data_a != data_b && pass) begin
+                                    pass <= 1'b0;
+                                    fail_index <= index_q;
+                                end
+                            end
+                            default: begin
+                                if (pass) begin
+                                    pass <= 1'b0;
+                                    fail_index <= index_q;
+                                end
+                            end
+                        endcase
+                        if (index_q == item_count_q - 16'd1) begin
+                            st <= S_DONE;
+                        end else begin
+                            index_q <= index_q + 16'd1;
+                        end
+                    end else if (MAX_STALL_CYCLES > 0) begin
+                        if (stall_count_q == MAX_STALL_CYCLES_U32) begin
+                            pass <= 1'b0;
+                            fail_index <= index_q;
+                            st <= S_DONE;
+                        end else begin
+                            stall_count_q <= stall_count_q + 32'd1;
+                        end
+                    end
+                end
+                S_DONE: begin
+                    busy <= 1'b0;
+                    done <= 1'b1;
+                    st   <= S_IDLE;
+                end
+                default: st <= S_IDLE;
+            endcase
+        end
+    end
+
+`ifndef SYNTHESIS
+    always_ff @(posedge clk) begin
+        if (rst_n) begin
+            if (st != S_IDLE && start) assert (busy);
+            if (st == S_RUN && mode_q == MLDSA_CHECK_NORM && data_valid) begin
+                assert (data_a < (MLDSA_Q_COEFF << 1));
+            end
+        end
+    end
+`endif
+endmodule
+
+`default_nettype wire
