@@ -5,11 +5,11 @@ import mldsa_pkg::*;
 import mldsa_fused_bank_map_pkg::*;
 
 module mldsa_top_axi_lite #(
-`ifdef MLDSA_TARGET_FPGA
-    parameter int BANKS = 65
-`else
-    parameter int BANKS = MLDSA_FUSED_BANKS_65
-`endif
+    // Default to the functionally legal 65-bank fused configuration so a
+    // Vivado GUI project can synthesize this top without manual verilog_define
+    // properties. ASIC/design-space runs may still override BANKS explicitly.
+    parameter int BANKS = 65,
+    parameter bit EXPANDA_PRIVATE_XOF = 1'b0
 ) (
     input  wire                         clk,
     input  wire                         rst_n,
@@ -88,6 +88,7 @@ module mldsa_top_axi_lite #(
     logic [31:0]                 op_cycle_counter;
     logic [31:0]                 last_op_cycles;
     logic [23:0]                 host_rd_data;
+    wire [7:0]                   sig_hash_rd_data_unused;
 
     logic wr_fire;
     logic rd_fire;
@@ -157,7 +158,10 @@ module mldsa_top_axi_lite #(
     assign s_axi_rresp = 2'b00;
     assign irq = done_latched;
 
-    mldsa_top_wrapper #(.BANKS(BANKS)) u_core (
+    mldsa_top_wrapper #(
+        .BANKS(BANKS),
+        .EXPANDA_PRIVATE_XOF(EXPANDA_PRIVATE_XOF)
+    ) u_core (
         .clk           (clk),
         .rst_n         (rst_n),
         .load_poly_we  (load_poly_we_q),
@@ -170,11 +174,19 @@ module mldsa_top_axi_lite #(
         .load_seed_we  (load_seed_we_q),
         .load_seed_addr(seed_addr_reg),
         .load_seed_data(seed_data_reg),
+        .load_expanded_seed_we(1'b0),
+        .load_expanded_seed_sel(2'd0),
+        .load_expanded_seed_addr(6'd0),
+        .load_expanded_seed_data(8'd0),
         .standard_mode (standard_mode_reg),
         .load_ctx_we   (load_ctx_we_q),
         .load_ctx_sel  (ctx_sel_reg),
         .load_ctx_addr (ctx_addr_reg),
         .load_ctx_data (ctx_data_reg),
+        .load_sig_hash_we(1'b0),
+        .load_sig_hash_addr(6'd0),
+        .load_sig_hash_data(8'd0),
+        .sig_hash_rd_addr(6'd0),
         .message_len   (message_len_reg),
         .start         (core_start),
         .level_sel     (level_sel_reg),
@@ -186,6 +198,7 @@ module mldsa_top_axi_lite #(
         .err_code      (core_err_code),
         .uop_dbg       (core_uop_dbg),
         .state_dbg     (core_state_dbg),
+        .sig_hash_rd_data(sig_hash_rd_data_unused),
         .host_rd_data  (host_rd_data)
     );
 

@@ -370,9 +370,6 @@ module mldsa65_full_core #(
     logic ctrl_rd0_en;
     logic [$clog2(BANKS)-1:0] ctrl_rd0_bank;
     logic [7:0] ctrl_rd0_addr;
-    logic ctrl_pair_rd0_en;
-    logic [$clog2(BANKS)-1:0] ctrl_pair_rd0_bank;
-    logic [6:0] ctrl_pair_rd0_addr;
     logic ctrl_rd1_en;
     logic [$clog2(BANKS)-1:0] ctrl_rd1_bank;
     logic [7:0] ctrl_rd1_addr;
@@ -467,7 +464,6 @@ module mldsa65_full_core #(
     logic [MLDSA_COEFF_W-1:0] check_data_a;
     logic [MLDSA_COEFF_W-1:0] check_data_b;
     logic check_data_valid;
-    logic check_data_pair_valid;
     logic check_data_ready;
     logic check_pass;
     logic [15:0] check_fail_index;
@@ -478,8 +474,6 @@ module mldsa65_full_core #(
     logic                     check_pipe_valid_q;
     logic                     check_pipe_issue_q;
     logic                     check_pipe_dual_q;
-    logic                     check_pipe_pair_q;
-    logic                     check_pipe_pair_issue;
     logic                     check_pipe_issue;
     logic [MLDSA_COEFF_W-1:0] r0_cs2_q;
 `ifdef MLDSA_TARGET_FPGA
@@ -713,17 +707,6 @@ module mldsa65_full_core #(
     logic [63:0] perf_total_xof_private_q, perf_attempt_xof_private_q, perf_uop_xof_private_q;
     logic [63:0] perf_total_xof_overlap_q, perf_attempt_xof_overlap_q, perf_uop_xof_overlap_q;
     logic [63:0] perf_total_misc_q,     perf_attempt_misc_q,     perf_uop_misc_q;
-    logic [63:0] perf_total_mv_clear_q, perf_attempt_mv_clear_q, perf_uop_mv_clear_q;
-    logic [63:0] perf_total_mv_fntt_q,  perf_attempt_mv_fntt_q,  perf_uop_mv_fntt_q;
-    logic [63:0] perf_total_mv_afill_q, perf_attempt_mv_afill_q, perf_uop_mv_afill_q;
-    logic [63:0] perf_total_mv_mac_q,   perf_attempt_mv_mac_q,   perf_uop_mv_mac_q;
-    logic [63:0] perf_total_mv_intt_q,  perf_attempt_mv_intt_q,  perf_uop_mv_intt_q;
-    logic [63:0] perf_total_mv_ctrl_q,  perf_attempt_mv_ctrl_q,  perf_uop_mv_ctrl_q;
-
-    function automatic bit perf_uop_is_matvec(input logic [7:0] uop);
-        perf_uop_is_matvec =
-            (uop == MLDSA_UOP_MATVEC_AY) || (uop == MLDSA_UOP_MATVEC_AZ);
-    endfunction
 
     function automatic bit perf_state_is_sampler(input state_e s);
         perf_state_is_sampler =
@@ -1377,7 +1360,6 @@ module mldsa65_full_core #(
         .data_a      (check_data_a),
         .data_b      (check_data_b),
         .data_valid  (check_data_valid),
-        .data_pair_valid (check_data_pair_valid),
         .data_ready  (check_data_ready),
         .pass        (check_pass),
         .fail_index  (check_fail_index),
@@ -1594,9 +1576,6 @@ module mldsa65_full_core #(
         ctrl_rd0_en   = 1'b0;
         ctrl_rd0_bank = '0;
         ctrl_rd0_addr = 8'd0;
-        ctrl_pair_rd0_en   = 1'b0;
-        ctrl_pair_rd0_bank = '0;
-        ctrl_pair_rd0_addr = 7'd0;
         ctrl_rd1_en   = 1'b0;
         ctrl_rd1_bank = '0;
         ctrl_rd1_addr = 8'd0;
@@ -1634,9 +1613,7 @@ module mldsa65_full_core #(
         check_data_a     = check_pipe_a_q;
         check_data_b     = check_pipe_b_q;
         check_data_valid = 1'b0;
-        check_data_pair_valid = 1'b0;
         check_pipe_issue = 1'b0;
-        check_pipe_pair_issue = 1'b0;
 
         pack_start           = 1'b0;
         pack_mode            = MLDSA_PACK_COEFF24_PACK;
@@ -2235,18 +2212,10 @@ module mldsa65_full_core #(
                 check_mode       = MLDSA_CHECK_NORM;
                 check_item_count = cfg_z_total_coeffs_q;
                 check_limit      = cfg_z_bound_q;
-`ifdef MLDSA_CHECK_PAIR_IO
-                ctrl_pair_rd0_en   = 1'b1;
-                ctrl_pair_rd0_bank = bank_z(3'd0);
-                ctrl_pair_rd0_addr = 7'd0;
-                check_pipe_issue = 1'b1;
-                check_pipe_pair_issue = 1'b1;
-`else
                 ctrl_rd0_en      = 1'b1;
                 ctrl_rd0_bank    = bank_z(3'd0);
                 ctrl_rd0_addr    = 8'd0;
                 check_pipe_issue = 1'b1;
-`endif
             end
             S_ZCHK_RDWAIT: begin
                 check_mode       = MLDSA_CHECK_NORM;
@@ -2258,9 +2227,6 @@ module mldsa65_full_core #(
                 check_item_count = cfg_z_total_coeffs_q;
                 check_limit      = cfg_z_bound_q;
                 check_data_valid = check_pipe_valid_q;
-`ifdef MLDSA_CHECK_PAIR_IO
-                check_data_pair_valid = check_pipe_valid_q;
-`endif
 `ifdef MLDSA_DEBUG_DISPLAY
                 if (check_pipe_valid_q &&
                     ((sign_retry_count == 8'd4 && poly_idx == 3'd0 && coeff_idx < 8'd4) ||
@@ -2274,22 +2240,12 @@ module mldsa65_full_core #(
                              center_modq(cfg_z_bound_q), check_pass);
                 end
 `endif
-`ifdef MLDSA_CHECK_PAIR_IO
-                if (poly_idx != cfg_l_last_q || coeff_idx != 8'd254) begin
-                    ctrl_pair_rd0_en   = 1'b1;
-                    ctrl_pair_rd0_bank = (coeff_idx == 8'd254) ? bank_z(poly_idx + 3'd1) : bank_z(poly_idx);
-                    ctrl_pair_rd0_addr = (coeff_idx == 8'd254) ? 7'd0 : (coeff_idx[7:1] + 7'd1);
-                    check_pipe_issue = check_pipe_valid_q;
-                    check_pipe_pair_issue = check_pipe_valid_q;
-                end
-`else
                 if (poly_idx != cfg_l_last_q || coeff_idx != 8'd255) begin
                     ctrl_rd0_en   = 1'b1;
                     ctrl_rd0_bank = (coeff_idx == 8'd255) ? bank_z(poly_idx + 3'd1) : bank_z(poly_idx);
                     ctrl_rd0_addr = (coeff_idx == 8'd255) ? 8'd0 : (coeff_idx + 8'd1);
                     check_pipe_issue = check_pipe_valid_q;
                 end
-`endif
             end
 
             S_HINT_CS2_MUL_START: begin
@@ -2448,18 +2404,10 @@ module mldsa65_full_core #(
                 check_mode       = MLDSA_CHECK_HINTCNT;
                 check_item_count = {4'd0, cfg_k_q, 8'd0};
                 check_limit      = {{16{1'b0}}, cfg_omega_q};
-`ifdef MLDSA_CHECK_PAIR_IO
-                ctrl_pair_rd0_en   = 1'b1;
-                ctrl_pair_rd0_bank = bank_hint_result(3'd0);
-                ctrl_pair_rd0_addr = 7'd0;
-                check_pipe_issue = 1'b1;
-                check_pipe_pair_issue = 1'b1;
-`else
                 ctrl_rd0_en      = 1'b1;
                 ctrl_rd0_bank    = bank_hint_result(3'd0);
                 ctrl_rd0_addr    = 8'd0;
                 check_pipe_issue = 1'b1;
-`endif
             end
             S_HINTCNT_RDWAIT: begin
                 check_mode       = MLDSA_CHECK_HINTCNT;
@@ -2471,23 +2419,12 @@ module mldsa65_full_core #(
                 check_item_count = {4'd0, cfg_k_q, 8'd0};
                 check_limit      = {{16{1'b0}}, cfg_omega_q};
                 check_data_valid = check_pipe_valid_q;
-`ifdef MLDSA_CHECK_PAIR_IO
-                check_data_pair_valid = check_pipe_valid_q;
-                if (poly_idx != cfg_k_last_q || coeff_idx != 8'd254) begin
-                    ctrl_pair_rd0_en   = 1'b1;
-                    ctrl_pair_rd0_bank = (coeff_idx == 8'd254) ? bank_hint_result(poly_idx + 3'd1) : bank_hint_result(poly_idx);
-                    ctrl_pair_rd0_addr = (coeff_idx == 8'd254) ? 7'd0 : (coeff_idx[7:1] + 7'd1);
-                    check_pipe_issue = check_pipe_valid_q;
-                    check_pipe_pair_issue = check_pipe_valid_q;
-                end
-`else
                 if (poly_idx != cfg_k_last_q || coeff_idx != 8'd255) begin
                     ctrl_rd0_en   = 1'b1;
                     ctrl_rd0_bank = (coeff_idx == 8'd255) ? bank_hint_result(poly_idx + 3'd1) : bank_hint_result(poly_idx);
                     ctrl_rd0_addr = (coeff_idx == 8'd255) ? 8'd0 : (coeff_idx + 8'd1);
                     check_pipe_issue = check_pipe_valid_q;
                 end
-`endif
             end
             S_PACKH_START: begin
                 pack_start      = 1'b1;
@@ -2663,9 +2600,9 @@ module mldsa65_full_core #(
             ram_rd0_en   = ctrl_rd0_en;
             ram_rd0_bank = ctrl_rd0_bank;
             ram_rd0_addr = ctrl_rd0_addr;
-            ram_pair_rd0_en   = ctrl_pair_rd0_en;
-            ram_pair_rd0_bank = ctrl_pair_rd0_bank;
-            ram_pair_rd0_addr = ctrl_pair_rd0_addr;
+            ram_pair_rd0_en   = 1'b0;
+            ram_pair_rd0_bank = '0;
+            ram_pair_rd0_addr = 7'd0;
             ram_rd1_en   = ctrl_rd1_en;
             ram_rd1_bank = ctrl_rd1_bank;
             ram_rd1_addr = ctrl_rd1_addr;
@@ -2764,7 +2701,6 @@ module mldsa65_full_core #(
             check_pipe_valid_q <= 1'b0;
             check_pipe_issue_q <= 1'b0;
             check_pipe_dual_q <= 1'b0;
-            check_pipe_pair_q <= 1'b0;
 `ifdef MLDSA_TARGET_FPGA
             w1_fast_a1_pre_q <= 32'sd0;
             w1_fast_a1_mul_q <= 56'sd0;
@@ -2867,12 +2803,10 @@ module mldsa65_full_core #(
 `endif
             check_pipe_issue_q <= check_pipe_issue;
             check_pipe_dual_q <= check_pipe_issue && ctrl_rd1_en;
-            check_pipe_pair_q <= check_pipe_pair_issue;
 
             if (check_pipe_issue_q) begin
-                check_pipe_a_q <= check_pipe_pair_q ? ram_pair_rd0_data[23:0] : ram_rd0_data;
-                check_pipe_b_q <= check_pipe_pair_q ? ram_pair_rd0_data[47:24] :
-                                  (check_pipe_dual_q ? ram_rd1_data : '0);
+                check_pipe_a_q <= ram_rd0_data;
+                check_pipe_b_q <= check_pipe_dual_q ? ram_rd1_data : '0;
                 check_pipe_valid_q <= 1'b1;
             end
 
@@ -3102,17 +3036,9 @@ module mldsa65_full_core #(
                             MLDSA_UOP_MATVEC_AY,
                             MLDSA_UOP_MATVEC_AZ: begin
                                 vec_i <= 3'd0;
-                                vec_j <= 3'd0;
                                 coeff_idx <= 8'd0;
                                 if (uop_code == MLDSA_UOP_MATVEC_AZ) op_pass_q <= 1'b0;
-`ifdef MLDSA_MATVEC_SKIP_ACC_CLEAR
-                                // The first matrix-vector column uses MLDSA_POLY_MUL and fully
-                                // overwrites every accumulator bank, so the explicit zero pass is
-                                // only needed when this guard is disabled for A/B testing.
-                                st <= S_MV_NTT_START;
-`else
                                 st <= S_MV_CLR;
-`endif
                             end
                             MLDSA_UOP_PACK_W1_SIGN: begin
                                 poly_idx <= 3'd0;
@@ -3868,18 +3794,6 @@ module mldsa65_full_core #(
                 end
                 S_ZCHK_FEED: begin
                     if (check_pipe_valid_q) begin
-`ifdef MLDSA_CHECK_PAIR_IO
-                        if (poly_idx == cfg_l_last_q && coeff_idx == 8'd254) begin
-                            st <= S_ZCHK_WAIT;
-                        end else if (coeff_idx == 8'd254) begin
-                            poly_idx <= poly_idx + 3'd1;
-                            coeff_idx <= 8'd0;
-                            st <= S_ZCHK_RDWAIT;
-                        end else begin
-                            coeff_idx <= coeff_idx + 8'd2;
-                            st <= S_ZCHK_RDWAIT;
-                        end
-`else
                         if (poly_idx == cfg_l_last_q && coeff_idx == 8'd255) begin
                             st <= S_ZCHK_WAIT;
                         end else if (coeff_idx == 8'd255) begin
@@ -3890,7 +3804,6 @@ module mldsa65_full_core #(
                             coeff_idx <= coeff_idx + 8'd1;
                             st <= S_ZCHK_RDWAIT;
                         end
-`endif
                     end
                 end
                 S_ZCHK_WAIT: begin
@@ -4057,18 +3970,6 @@ module mldsa65_full_core #(
                 end
                 S_HINTCNT_FEED: begin
                     if (check_pipe_valid_q) begin
-`ifdef MLDSA_CHECK_PAIR_IO
-                        if (poly_idx == cfg_k_last_q && coeff_idx == 8'd254) begin
-                            st <= S_HINTCNT_WAIT;
-                        end else if (coeff_idx == 8'd254) begin
-                            poly_idx <= poly_idx + 3'd1;
-                            coeff_idx <= 8'd0;
-                            st <= S_HINTCNT_RDWAIT;
-                        end else begin
-                            coeff_idx <= coeff_idx + 8'd2;
-                            st <= S_HINTCNT_RDWAIT;
-                        end
-`else
                         if (poly_idx == cfg_k_last_q && coeff_idx == 8'd255) begin
                             st <= S_HINTCNT_WAIT;
                         end else if (coeff_idx == 8'd255) begin
@@ -4079,7 +3980,6 @@ module mldsa65_full_core #(
                             coeff_idx <= coeff_idx + 8'd1;
                             st <= S_HINTCNT_RDWAIT;
                         end
-`endif
                     end
                 end
                 S_HINTCNT_WAIT: begin
@@ -4253,19 +4153,6 @@ module mldsa65_full_core #(
     end
 
 `ifndef SYNTHESIS
-`ifdef MLDSA_CHECK_PAIR_IO
-`ifdef MLDSA_SAMPLER_UNIFORM_WORD_FAST
-`define MLDSA_PERF_CONFIG_ID "fused_shared_core_residentA128_privateXOF_packstage_dhraw_hash2p_ctilde_w1pipe_pairio_checkpair_mvnoclr_ufast"
-`else
-`define MLDSA_PERF_CONFIG_ID "fused_shared_core_residentA128_privateXOF_packstage_dhraw_hash2p_ctilde_w1pipe_pairio_checkpair_mvnoclr"
-`endif
-`else
-`ifdef MLDSA_SAMPLER_UNIFORM_WORD_FAST
-`define MLDSA_PERF_CONFIG_ID "fused_shared_core_residentA128_privateXOF_packstage_dhraw_hash2p_ctilde_w1pipe_pairio_mvnoclr_ufast"
-`else
-`define MLDSA_PERF_CONFIG_ID "fused_shared_core_residentA128_privateXOF_packstage_dhraw_hash2p_ctilde_w1pipe_pairio_mvnoclr"
-`endif
-`endif
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             perf_active_q <= 1'b0;
@@ -4291,12 +4178,6 @@ module mldsa65_full_core #(
             perf_total_xof_private_q <= 64'd0; perf_attempt_xof_private_q <= 64'd0; perf_uop_xof_private_q <= 64'd0;
             perf_total_xof_overlap_q <= 64'd0; perf_attempt_xof_overlap_q <= 64'd0; perf_uop_xof_overlap_q <= 64'd0;
             perf_total_misc_q <= 64'd0;        perf_attempt_misc_q <= 64'd0;        perf_uop_misc_q <= 64'd0;
-            perf_total_mv_clear_q <= 64'd0;    perf_attempt_mv_clear_q <= 64'd0;    perf_uop_mv_clear_q <= 64'd0;
-            perf_total_mv_fntt_q <= 64'd0;     perf_attempt_mv_fntt_q <= 64'd0;     perf_uop_mv_fntt_q <= 64'd0;
-            perf_total_mv_afill_q <= 64'd0;    perf_attempt_mv_afill_q <= 64'd0;    perf_uop_mv_afill_q <= 64'd0;
-            perf_total_mv_mac_q <= 64'd0;      perf_attempt_mv_mac_q <= 64'd0;      perf_uop_mv_mac_q <= 64'd0;
-            perf_total_mv_intt_q <= 64'd0;     perf_attempt_mv_intt_q <= 64'd0;     perf_uop_mv_intt_q <= 64'd0;
-            perf_total_mv_ctrl_q <= 64'd0;     perf_attempt_mv_ctrl_q <= 64'd0;     perf_uop_mv_ctrl_q <= 64'd0;
         end else begin
             if (start && !ucode_busy) begin
                 perf_active_q <= level_valid;
@@ -4322,15 +4203,8 @@ module mldsa65_full_core #(
                 perf_total_xof_private_q <= 64'd0; perf_attempt_xof_private_q <= 64'd0; perf_uop_xof_private_q <= 64'd0;
                 perf_total_xof_overlap_q <= 64'd0; perf_attempt_xof_overlap_q <= 64'd0; perf_uop_xof_overlap_q <= 64'd0;
                 perf_total_misc_q <= 64'd0;        perf_attempt_misc_q <= 64'd0;        perf_uop_misc_q <= 64'd0;
-                perf_total_mv_clear_q <= 64'd0;    perf_attempt_mv_clear_q <= 64'd0;    perf_uop_mv_clear_q <= 64'd0;
-                perf_total_mv_fntt_q <= 64'd0;     perf_attempt_mv_fntt_q <= 64'd0;     perf_uop_mv_fntt_q <= 64'd0;
-                perf_total_mv_afill_q <= 64'd0;    perf_attempt_mv_afill_q <= 64'd0;    perf_uop_mv_afill_q <= 64'd0;
-                perf_total_mv_mac_q <= 64'd0;      perf_attempt_mv_mac_q <= 64'd0;      perf_uop_mv_mac_q <= 64'd0;
-                perf_total_mv_intt_q <= 64'd0;     perf_attempt_mv_intt_q <= 64'd0;     perf_uop_mv_intt_q <= 64'd0;
-                perf_total_mv_ctrl_q <= 64'd0;     perf_attempt_mv_ctrl_q <= 64'd0;     perf_uop_mv_ctrl_q <= 64'd0;
                 if (level_valid) begin
-                    $display("PERF_CONFIG config=%s level=%0d op=%0d banks=%0d standard=%0b k=%0d l=%0d private_xof=%0d notes=rtl_perf_counters",
-                             `MLDSA_PERF_CONFIG_ID,
+                    $display("PERF_CONFIG config=fused_shared_core_residentA128_privateXOF_packstage_dhraw_hash2p_ctilde_w1pipe level=%0d op=%0d banks=%0d standard=%0b k=%0d l=%0d private_xof=%0d notes=rtl_perf_counters",
                              level_sel, op_mode, BANKS, standard_mode, level_k, level_l,
                              EXPANDA_PRIVATE_XOF);
                 end
@@ -4471,37 +4345,9 @@ module mldsa65_full_core #(
                     perf_attempt_misc_q <= perf_attempt_misc_q + 64'd1;
                     perf_uop_misc_q <= perf_uop_misc_q + 64'd1;
                 end
-                if (perf_uop_is_matvec(uop_code)) begin
-                    if (st == S_MV_CLR) begin
-                        perf_total_mv_clear_q <= perf_total_mv_clear_q + 64'd1;
-                        perf_attempt_mv_clear_q <= perf_attempt_mv_clear_q + 64'd1;
-                        perf_uop_mv_clear_q <= perf_uop_mv_clear_q + 64'd1;
-                    end else if ((st == S_MV_NTT_START) || (st == S_MV_NTT_WAIT)) begin
-                        perf_total_mv_fntt_q <= perf_total_mv_fntt_q + 64'd1;
-                        perf_attempt_mv_fntt_q <= perf_attempt_mv_fntt_q + 64'd1;
-                        perf_uop_mv_fntt_q <= perf_uop_mv_fntt_q + 64'd1;
-                    end else if ((st == S_MV_A_START) || (st == S_MV_A_FILL)) begin
-                        perf_total_mv_afill_q <= perf_total_mv_afill_q + 64'd1;
-                        perf_attempt_mv_afill_q <= perf_attempt_mv_afill_q + 64'd1;
-                        perf_uop_mv_afill_q <= perf_uop_mv_afill_q + 64'd1;
-                    end else if ((st == S_MV_MAC_START) || (st == S_MV_MAC_WAIT)) begin
-                        perf_total_mv_mac_q <= perf_total_mv_mac_q + 64'd1;
-                        perf_attempt_mv_mac_q <= perf_attempt_mv_mac_q + 64'd1;
-                        perf_uop_mv_mac_q <= perf_uop_mv_mac_q + 64'd1;
-                    end else if ((st == S_MV_INV_START) || (st == S_MV_INV_WAIT)) begin
-                        perf_total_mv_intt_q <= perf_total_mv_intt_q + 64'd1;
-                        perf_attempt_mv_intt_q <= perf_attempt_mv_intt_q + 64'd1;
-                        perf_uop_mv_intt_q <= perf_uop_mv_intt_q + 64'd1;
-                    end else begin
-                        perf_total_mv_ctrl_q <= perf_total_mv_ctrl_q + 64'd1;
-                        perf_attempt_mv_ctrl_q <= perf_attempt_mv_ctrl_q + 64'd1;
-                        perf_uop_mv_ctrl_q <= perf_uop_mv_ctrl_q + 64'd1;
-                    end
-                end
 
                 if (uop_step_done || uop_step_retry || uop_step_fail) begin
-                    $display("PERF_UOP config=%s op=%0d level=%0d attempt=%0d pc=%0d uop=%0d action=%0d cycles=%0d seed=%0d expanda=%0d stdhash=%0d sampler=%0d ntt=%0d poly=%0d pack=%0d check=%0d xof_busy=%0d xof_abs_bytes=%0d xof_sq_bytes=%0d xof_seed=%0d xof_expanda=%0d xof_stdhash=%0d xof_local=%0d xof_shared=%0d xof_private=%0d xof_overlap=%0d misc=%0d mv_clear=%0d mv_fntt=%0d mv_afill=%0d mv_mac=%0d mv_intt=%0d mv_ctrl=%0d st=%0d",
-                             `MLDSA_PERF_CONFIG_ID,
+                    $display("PERF_UOP config=fused_shared_core_residentA128_privateXOF_packstage_dhraw_hash2p_ctilde_w1pipe op=%0d level=%0d attempt=%0d pc=%0d uop=%0d action=%0d cycles=%0d seed=%0d expanda=%0d stdhash=%0d sampler=%0d ntt=%0d poly=%0d pack=%0d check=%0d xof_busy=%0d xof_abs_bytes=%0d xof_sq_bytes=%0d xof_seed=%0d xof_expanda=%0d xof_stdhash=%0d xof_local=%0d xof_shared=%0d xof_private=%0d xof_overlap=%0d misc=%0d st=%0d",
                              op_mode, level_sel, sign_retry_count, ucode_pc, uop_code,
                              uop_step_retry ? 1 : (uop_step_fail ? 2 : 0),
                              perf_uop_cycles_q, perf_uop_seed_q, perf_uop_expanda_q,
@@ -4512,10 +4358,7 @@ module mldsa65_full_core #(
                              perf_uop_xof_stdhash_q, perf_uop_xof_local_q,
                              perf_uop_xof_shared_q, perf_uop_xof_private_q,
                              perf_uop_xof_overlap_q,
-                             perf_uop_misc_q,
-                             perf_uop_mv_clear_q, perf_uop_mv_fntt_q,
-                             perf_uop_mv_afill_q, perf_uop_mv_mac_q,
-                             perf_uop_mv_intt_q, perf_uop_mv_ctrl_q, st);
+                             perf_uop_misc_q, st);
                     perf_uop_cycles_q <= 64'd0;
                     perf_uop_seed_q <= 64'd0;
                     perf_uop_expanda_q <= 64'd0;
@@ -4536,17 +4379,10 @@ module mldsa65_full_core #(
                     perf_uop_xof_private_q <= 64'd0;
                     perf_uop_xof_overlap_q <= 64'd0;
                     perf_uop_misc_q <= 64'd0;
-                    perf_uop_mv_clear_q <= 64'd0;
-                    perf_uop_mv_fntt_q <= 64'd0;
-                    perf_uop_mv_afill_q <= 64'd0;
-                    perf_uop_mv_mac_q <= 64'd0;
-                    perf_uop_mv_intt_q <= 64'd0;
-                    perf_uop_mv_ctrl_q <= 64'd0;
                 end
 
                 if (uop_step_retry) begin
-                    $display("PERF_ATTEMPT config=%s op=%0d level=%0d attempt=%0d action=retry reject_uop=%0d cycles=%0d seed=%0d expanda=%0d stdhash=%0d sampler=%0d ntt=%0d poly=%0d pack=%0d check=%0d xof_busy=%0d xof_abs_bytes=%0d xof_sq_bytes=%0d xof_seed=%0d xof_expanda=%0d xof_stdhash=%0d xof_local=%0d xof_shared=%0d xof_private=%0d xof_overlap=%0d misc=%0d mv_clear=%0d mv_fntt=%0d mv_afill=%0d mv_mac=%0d mv_intt=%0d mv_ctrl=%0d",
-                             `MLDSA_PERF_CONFIG_ID,
+                    $display("PERF_ATTEMPT config=fused_shared_core_residentA128_privateXOF_packstage_dhraw_hash2p_ctilde_w1pipe op=%0d level=%0d attempt=%0d action=retry reject_uop=%0d cycles=%0d seed=%0d expanda=%0d stdhash=%0d sampler=%0d ntt=%0d poly=%0d pack=%0d check=%0d xof_busy=%0d xof_abs_bytes=%0d xof_sq_bytes=%0d xof_seed=%0d xof_expanda=%0d xof_stdhash=%0d xof_local=%0d xof_shared=%0d xof_private=%0d xof_overlap=%0d misc=%0d",
                              op_mode, level_sel, sign_retry_count, uop_code,
                              perf_attempt_cycles_q, perf_attempt_seed_q, perf_attempt_expanda_q,
                              perf_attempt_stdhash_q, perf_attempt_sampler_q, perf_attempt_ntt_q,
@@ -4556,10 +4392,7 @@ module mldsa65_full_core #(
                              perf_attempt_xof_stdhash_q, perf_attempt_xof_local_q,
                              perf_attempt_xof_shared_q, perf_attempt_xof_private_q,
                              perf_attempt_xof_overlap_q,
-                             perf_attempt_misc_q,
-                             perf_attempt_mv_clear_q, perf_attempt_mv_fntt_q,
-                             perf_attempt_mv_afill_q, perf_attempt_mv_mac_q,
-                             perf_attempt_mv_intt_q, perf_attempt_mv_ctrl_q);
+                             perf_attempt_misc_q);
                     perf_attempt_cycles_q <= 64'd0;
                     perf_attempt_seed_q <= 64'd0;
                     perf_attempt_expanda_q <= 64'd0;
@@ -4580,17 +4413,10 @@ module mldsa65_full_core #(
                     perf_attempt_xof_private_q <= 64'd0;
                     perf_attempt_xof_overlap_q <= 64'd0;
                     perf_attempt_misc_q <= 64'd0;
-                    perf_attempt_mv_clear_q <= 64'd0;
-                    perf_attempt_mv_fntt_q <= 64'd0;
-                    perf_attempt_mv_afill_q <= 64'd0;
-                    perf_attempt_mv_mac_q <= 64'd0;
-                    perf_attempt_mv_intt_q <= 64'd0;
-                    perf_attempt_mv_ctrl_q <= 64'd0;
                 end
 
                 if (done || error) begin
-                    $display("PERF_ATTEMPT config=%s op=%0d level=%0d attempt=%0d action=final cycles=%0d seed=%0d expanda=%0d stdhash=%0d sampler=%0d ntt=%0d poly=%0d pack=%0d check=%0d xof_busy=%0d xof_abs_bytes=%0d xof_sq_bytes=%0d xof_seed=%0d xof_expanda=%0d xof_stdhash=%0d xof_local=%0d xof_shared=%0d xof_private=%0d xof_overlap=%0d misc=%0d mv_clear=%0d mv_fntt=%0d mv_afill=%0d mv_mac=%0d mv_intt=%0d mv_ctrl=%0d pass=%0b error=%0b",
-                             `MLDSA_PERF_CONFIG_ID,
+                    $display("PERF_ATTEMPT config=fused_shared_core_residentA128_privateXOF_packstage_dhraw_hash2p_ctilde_w1pipe op=%0d level=%0d attempt=%0d action=final cycles=%0d seed=%0d expanda=%0d stdhash=%0d sampler=%0d ntt=%0d poly=%0d pack=%0d check=%0d xof_busy=%0d xof_abs_bytes=%0d xof_sq_bytes=%0d xof_seed=%0d xof_expanda=%0d xof_stdhash=%0d xof_local=%0d xof_shared=%0d xof_private=%0d xof_overlap=%0d misc=%0d pass=%0b error=%0b",
                              op_mode, level_sel, sign_retry_count,
                              perf_attempt_cycles_q, perf_attempt_seed_q, perf_attempt_expanda_q,
                              perf_attempt_stdhash_q, perf_attempt_sampler_q, perf_attempt_ntt_q,
@@ -4600,13 +4426,8 @@ module mldsa65_full_core #(
                              perf_attempt_xof_stdhash_q, perf_attempt_xof_local_q,
                              perf_attempt_xof_shared_q, perf_attempt_xof_private_q,
                              perf_attempt_xof_overlap_q,
-                             perf_attempt_misc_q,
-                             perf_attempt_mv_clear_q, perf_attempt_mv_fntt_q,
-                             perf_attempt_mv_afill_q, perf_attempt_mv_mac_q,
-                             perf_attempt_mv_intt_q, perf_attempt_mv_ctrl_q,
-                             pass, error);
-                    $display("PERF_TOTAL config=%s op=%0d level=%0d attempts=%0d cycles=%0d seed=%0d expanda=%0d stdhash=%0d sampler=%0d ntt=%0d poly=%0d pack=%0d check=%0d xof_busy=%0d xof_abs_bytes=%0d xof_sq_bytes=%0d xof_seed=%0d xof_expanda=%0d xof_stdhash=%0d xof_local=%0d xof_shared=%0d xof_private=%0d xof_overlap=%0d misc=%0d mv_clear=%0d mv_fntt=%0d mv_afill=%0d mv_mac=%0d mv_intt=%0d mv_ctrl=%0d pass=%0b error=%0b err_code=%0d",
-                             `MLDSA_PERF_CONFIG_ID,
+                             perf_attempt_misc_q, pass, error);
+                    $display("PERF_TOTAL config=fused_shared_core_residentA128_privateXOF_packstage_dhraw_hash2p_ctilde_w1pipe op=%0d level=%0d attempts=%0d cycles=%0d seed=%0d expanda=%0d stdhash=%0d sampler=%0d ntt=%0d poly=%0d pack=%0d check=%0d xof_busy=%0d xof_abs_bytes=%0d xof_sq_bytes=%0d xof_seed=%0d xof_expanda=%0d xof_stdhash=%0d xof_local=%0d xof_shared=%0d xof_private=%0d xof_overlap=%0d misc=%0d pass=%0b error=%0b err_code=%0d",
                              op_mode, level_sel, sign_retry_count + 8'd1,
                              perf_total_cycles_q, perf_total_seed_q, perf_total_expanda_q,
                              perf_total_stdhash_q, perf_total_sampler_q, perf_total_ntt_q,
@@ -4616,17 +4437,12 @@ module mldsa65_full_core #(
                              perf_total_xof_stdhash_q, perf_total_xof_local_q,
                              perf_total_xof_shared_q, perf_total_xof_private_q,
                              perf_total_xof_overlap_q,
-                             perf_total_misc_q,
-                             perf_total_mv_clear_q, perf_total_mv_fntt_q,
-                             perf_total_mv_afill_q, perf_total_mv_mac_q,
-                             perf_total_mv_intt_q, perf_total_mv_ctrl_q,
-                             pass, error, err_code);
+                             perf_total_misc_q, pass, error, err_code);
                     perf_active_q <= 1'b0;
                 end
             end
         end
     end
-`undef MLDSA_PERF_CONFIG_ID
 `endif
 
     assign host_rd_data = ram_rd0_data;

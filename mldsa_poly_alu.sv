@@ -58,10 +58,15 @@ module mldsa_poly_alu #(
         S_PIPE_FLUSH,
         S_MAC_LOAD_READ,
         S_MAC_LOAD_CAP,
+        S_MAC_LOAD_WRITE,
         S_MAC_PIPE_READ,
         S_MAC_PIPE_ISSUE,
         S_MAC_PIPE_DRAIN,
         S_MAC_WRITE,
+        S_PAIR_READ,
+        S_PAIR_EXEC,
+        S_PAIR_WRITE,
+        S_PAIR_NEXT,
         S_WRITE,
         S_NEXT,
         S_DONE
@@ -91,16 +96,37 @@ module mldsa_poly_alu #(
     logic [7:0] pipe_addr_d1;
     logic [7:0] pipe_addr_d2;
     logic [7:0] pipe_addr_d3;
+    logic [7:0] pipe_addr_d4;
+`ifdef MLDSA_FPGA_REDUCE_PIPE2
+    wire [7:0] pipe_out_addr = pipe_addr_d4;
+`elsif MLDSA_TARGET_FPGA
+    wire [7:0] pipe_out_addr = pipe_addr_d3;
+`else
+    wire [7:0] pipe_out_addr = pipe_addr_d2;
+`endif
     logic [9:0] pipe_pending_q;
     logic pipe_wr_valid_q;
     logic pipe_fire;
     logic [7:0] pipe_wr_addr_q;
     logic [MLDSA_COEFF_W-1:0] pipe_wr_data_q;
     logic [8:0] coeff_idx_next;
+    logic [8:0] pair_prefetch_idx;
     logic [MLDSA_COEFF_W-1:0] mac_acc_rf [0:MLDSA_N-1];
     logic mac_acc_wr_valid_q;
     logic [7:0] mac_acc_wr_addr_q;
     logic [MLDSA_COEFF_W-1:0] mac_acc_wr_data_q;
+    logic mac_add_s1_valid_q;
+    logic [7:0] mac_add_s1_addr_q;
+    logic [MLDSA_COEFF_W-1:0] mac_add_s1_acc_even_q;
+    logic [MLDSA_COEFF_W-1:0] mac_add_s1_acc_odd_q;
+    logic [MLDSA_COEFF_W-1:0] mac_add_s1_mul_even_q;
+    logic [MLDSA_COEFF_W-1:0] mac_add_s1_mul_odd_q;
+    logic mac_add_s2_valid_q;
+    logic [7:0] mac_add_s2_addr_q;
+    logic [MLDSA_COEFF_W-1:0] mac_add_s2_sum_even_q;
+    logic [MLDSA_COEFF_W-1:0] mac_add_s2_sum_odd_q;
+    logic [47:0] mac_load_pair_q;
+    logic [47:0] pair_result_q;
 
     mldsa_modq_mul_pipe u_mul_pipe (
         .clk       (clk),
@@ -156,6 +182,7 @@ module mldsa_poly_alu #(
         pipe_odd_a    = 24'd0;
         pipe_odd_b    = 24'd0;
         coeff_idx_next = {1'b0, coeff_idx} + 9'd1;
+        pair_prefetch_idx = {1'b0, coeff_idx} + 9'd2;
         busy      = (st != S_IDLE) && (st != S_DONE);
         state_dbg = st[3:0];
 
@@ -223,6 +250,38 @@ module mldsa_poly_alu #(
                 pair_wr_bank = dst_bank_q;
                 pair_wr_addr = coeff_idx[6:0];
             end
+            S_PAIR_READ: begin
+                pair_rd0_en   = 1'b1;
+                pair_rd0_bank = src0_bank_q;
+                pair_rd0_addr = coeff_idx[6:0];
+                pair_rd1_en   = (op_q != MLDSA_POLY_COPY);
+                pair_rd1_bank = src1_bank_q;
+                pair_rd1_addr = coeff_idx[6:0];
+            end
+            S_PAIR_EXEC: begin
+                if (pair_rd0_valid && ((op_q == MLDSA_POLY_COPY) || pair_rd1_valid) && coeff_idx != 8'd127) begin
+                    pair_rd0_en   = 1'b1;
+                    pair_rd0_bank = src0_bank_q;
+                    pair_rd0_addr = coeff_idx_next[6:0];
+                    pair_rd1_en   = (op_q != MLDSA_POLY_COPY);
+                    pair_rd1_bank = src1_bank_q;
+                    pair_rd1_addr = coeff_idx_next[6:0];
+                end
+            end
+            S_PAIR_WRITE: begin
+                pair_wr_en   = 1'b1;
+                pair_wr_bank = dst_bank_q;
+                pair_wr_addr = coeff_idx[6:0];
+                pair_wr_data = pair_result_q;
+                if (pair_rd0_valid && ((op_q == MLDSA_POLY_COPY) || pair_rd1_valid) && coeff_idx < 8'd126) begin
+                    pair_rd0_en   = 1'b1;
+                    pair_rd0_bank = src0_bank_q;
+                    pair_rd0_addr = pair_prefetch_idx[6:0];
+                    pair_rd1_en   = (op_q != MLDSA_POLY_COPY);
+                    pair_rd1_bank = src1_bank_q;
+                    pair_rd1_addr = pair_prefetch_idx[6:0];
+                end
+            end
             default: ;
         endcase
 
@@ -249,6 +308,7 @@ module mldsa_poly_alu #(
             pipe_addr_d1 <= 8'd0;
             pipe_addr_d2 <= 8'd0;
             pipe_addr_d3 <= 8'd0;
+            pipe_addr_d4 <= 8'd0;
             pipe_pending_q <= 10'd0;
             pipe_wr_valid_q <= 1'b0;
             pipe_wr_addr_q  <= 8'd0;
@@ -256,30 +316,64 @@ module mldsa_poly_alu #(
             mac_acc_wr_valid_q <= 1'b0;
             mac_acc_wr_addr_q  <= 8'd0;
             mac_acc_wr_data_q  <= 24'd0;
+            mac_add_s1_valid_q <= 1'b0;
+            mac_add_s1_addr_q  <= 8'd0;
+            mac_add_s1_acc_even_q <= 24'd0;
+            mac_add_s1_acc_odd_q  <= 24'd0;
+            mac_add_s1_mul_even_q <= 24'd0;
+            mac_add_s1_mul_odd_q  <= 24'd0;
+            mac_add_s2_valid_q <= 1'b0;
+            mac_add_s2_addr_q  <= 8'd0;
+            mac_add_s2_sum_even_q <= 24'd0;
+            mac_add_s2_sum_odd_q  <= 24'd0;
+            mac_load_pair_q     <= 48'd0;
+            pair_result_q      <= 48'd0;
             done        <= 1'b0;
         end else begin
             done <= 1'b0;
             pipe_wr_valid_q <= 1'b0;
             mac_acc_wr_valid_q <= 1'b0;
+            mac_add_s1_valid_q <= 1'b0;
+            mac_add_s2_valid_q <= mac_add_s1_valid_q;
+            mac_add_s2_addr_q <= mac_add_s1_addr_q;
+            mac_add_s2_sum_even_q <= modq_add(mac_add_s1_acc_even_q, mac_add_s1_mul_even_q);
+            mac_add_s2_sum_odd_q <= modq_add(mac_add_s1_acc_odd_q, mac_add_s1_mul_odd_q);
             pipe_addr_d1 <= pipe_addr_d0;
             pipe_addr_d2 <= pipe_addr_d1;
             pipe_addr_d3 <= pipe_addr_d2;
+            pipe_addr_d4 <= pipe_addr_d3;
             pipe_pending_q <= pipe_pending_q
                               + (pipe_fire ? 10'd1 : 10'd0)
                               - (pipe_out_valid ? 10'd1 : 10'd0);
             if (pipe_out_valid && op_q == MLDSA_POLY_MUL) begin
                 pipe_wr_valid_q <= 1'b1;
-                pipe_wr_addr_q  <= pipe_addr_d2;
+                pipe_wr_addr_q  <= pipe_out_addr;
                 pipe_wr_data_q  <= pipe_result;
 `ifdef MLDSA_POLY_DEBUG
-                if (pipe_addr_d2 < 8'd4) begin
-                    $display("[POLY_DBG] wrcap t=%0t addr=%0d data=%0d", $time, pipe_addr_d2, pipe_result);
+                if (pipe_out_addr < 8'd4) begin
+                    $display("[POLY_DBG] wrcap t=%0t addr=%0d data=%0d", $time, pipe_out_addr, pipe_result);
                 end
 `endif
             end
             if (pipe_out_valid && op_q == MLDSA_POLY_MAC) begin
-                mac_acc_rf[{pipe_addr_d2[6:0], 1'b0}] <= modq_add(mac_acc_rf[{pipe_addr_d2[6:0], 1'b0}], pipe_result);
-                mac_acc_rf[{pipe_addr_d2[6:0], 1'b1}] <= modq_add(mac_acc_rf[{pipe_addr_d2[6:0], 1'b1}], pipe_odd_result);
+                mac_add_s1_valid_q <= 1'b1;
+                mac_add_s1_addr_q <= pipe_out_addr;
+                mac_add_s1_acc_even_q <= mac_acc_rf[{pipe_out_addr[6:0], 1'b0}];
+                mac_add_s1_acc_odd_q <= mac_acc_rf[{pipe_out_addr[6:0], 1'b1}];
+                mac_add_s1_mul_even_q <= pipe_result;
+                mac_add_s1_mul_odd_q <= pipe_odd_result;
+`ifdef MLDSA_POLY_DEBUG
+                if (pipe_out_addr < 8'd4) begin
+                    $display("[POLY_DBG] maccap t=%0t pair=%0d acc0_old=%0d mul0=%0d acc1_old=%0d mul1=%0d",
+                             $time, pipe_out_addr,
+                             mac_acc_rf[{pipe_out_addr[6:0], 1'b0}], pipe_result,
+                             mac_acc_rf[{pipe_out_addr[6:0], 1'b1}], pipe_odd_result);
+                end
+`endif
+            end
+            if (mac_add_s2_valid_q) begin
+                mac_acc_rf[{mac_add_s2_addr_q[6:0], 1'b0}] <= mac_add_s2_sum_even_q;
+                mac_acc_rf[{mac_add_s2_addr_q[6:0], 1'b1}] <= mac_add_s2_sum_odd_q;
             end
             unique case (st)
                 S_IDLE: begin
@@ -293,7 +387,7 @@ module mldsa_poly_alu #(
                         pipe_wr_valid_q <= 1'b0;
                         mac_acc_wr_valid_q <= 1'b0;
                         st          <= (op_code == MLDSA_POLY_MUL) ? S_PIPE_READ :
-                                       (op_code == MLDSA_POLY_MAC) ? S_MAC_LOAD_READ : S_READ_AB;
+                                       (op_code == MLDSA_POLY_MAC) ? S_MAC_LOAD_READ : S_PAIR_READ;
                     end
                 end
                 S_READ_AB: begin
@@ -364,15 +458,25 @@ module mldsa_poly_alu #(
                 end
                 S_MAC_LOAD_CAP: begin
                     if (pair_rd0_valid) begin
-                    mac_acc_rf[{coeff_idx[6:0], 1'b0}] <= pair_rd0_data[23:0];
-                    mac_acc_rf[{coeff_idx[6:0], 1'b1}] <= pair_rd0_data[47:24];
+                    mac_load_pair_q <= pair_rd0_data;
+`ifdef MLDSA_POLY_DEBUG
+                    if (coeff_idx < 8'd4) begin
+                        $display("[POLY_DBG] macload t=%0t pair=%0d dst_bank=%0d data0=%0d data1=%0d",
+                                 $time, coeff_idx, dst_bank_q, pair_rd0_data[23:0], pair_rd0_data[47:24]);
+                    end
+`endif
+                    st <= S_MAC_LOAD_WRITE;
+                    end
+                end
+                S_MAC_LOAD_WRITE: begin
+                    mac_acc_rf[{coeff_idx[6:0], 1'b0}] <= mac_load_pair_q[23:0];
+                    mac_acc_rf[{coeff_idx[6:0], 1'b1}] <= mac_load_pair_q[47:24];
                     if (coeff_idx == 8'd127) begin
                         coeff_idx <= 8'd0;
                         st        <= S_MAC_PIPE_READ;
                     end else begin
                         coeff_idx <= coeff_idx + 8'd1;
-                        st        <= S_MAC_LOAD_CAP;
-                    end
+                        st        <= S_MAC_LOAD_READ;
                     end
                 end
                 S_MAC_PIPE_READ: begin
@@ -382,6 +486,14 @@ module mldsa_poly_alu #(
                 S_MAC_PIPE_ISSUE: begin
                     if (pipe_fire) begin
                     pipe_addr_d0 <= coeff_idx;
+`ifdef MLDSA_POLY_DEBUG
+                    if (coeff_idx < 8'd4) begin
+                        $display("[POLY_DBG] macissue t=%0t pair=%0d a0=%0d b0=%0d a1=%0d b1=%0d",
+                                 $time, coeff_idx,
+                                 pair_rd0_data[23:0], pair_rd1_data[23:0],
+                                 pair_rd0_data[47:24], pair_rd1_data[47:24]);
+                    end
+`endif
                     if (coeff_idx == 8'd127) begin
                         st <= S_MAC_PIPE_DRAIN;
                     end else begin
@@ -391,17 +503,90 @@ module mldsa_poly_alu #(
                     end
                 end
                 S_MAC_PIPE_DRAIN: begin
-                    if (pipe_pending_q == (pipe_out_valid ? 10'd1 : 10'd0)) begin
+                    if (pipe_pending_q == (pipe_out_valid ? 10'd1 : 10'd0) &&
+                        !pipe_out_valid && !mac_add_s1_valid_q && !mac_add_s2_valid_q) begin
                         coeff_idx <= 8'd0;
                         st        <= S_MAC_WRITE;
                     end
                 end
                 S_MAC_WRITE: begin
+`ifdef MLDSA_POLY_DEBUG
+                    if (coeff_idx < 8'd4) begin
+                        $display("[POLY_DBG] macwrite t=%0t pair=%0d dst_bank=%0d data0=%0d data1=%0d",
+                                 $time, coeff_idx, dst_bank_q,
+                                 mac_acc_rf[{coeff_idx[6:0], 1'b0}],
+                                 mac_acc_rf[{coeff_idx[6:0], 1'b1}]);
+                    end
+`endif
                     if (coeff_idx == 8'd127) begin
                         st <= S_DONE;
                     end else begin
                         coeff_idx <= coeff_idx + 8'd1;
                         st        <= S_MAC_WRITE;
+                    end
+                end
+                S_PAIR_READ: begin
+                    st <= S_PAIR_EXEC;
+                end
+                S_PAIR_EXEC: begin
+                    if (pair_rd0_valid && ((op_q == MLDSA_POLY_COPY) || pair_rd1_valid)) begin
+                        unique case (op_q)
+                            MLDSA_POLY_COPY: begin
+                                pair_result_q <= pair_rd0_data;
+                            end
+                            MLDSA_POLY_ADD: begin
+                                pair_result_q <= {
+                                    modq_add(pair_rd0_data[47:24], pair_rd1_data[47:24]),
+                                    modq_add(pair_rd0_data[23:0],  pair_rd1_data[23:0])
+                                };
+                            end
+                            MLDSA_POLY_SUB: begin
+                                pair_result_q <= {
+                                    modq_sub(pair_rd0_data[47:24], pair_rd1_data[47:24]),
+                                    modq_sub(pair_rd0_data[23:0],  pair_rd1_data[23:0])
+                                };
+                            end
+                            default: begin
+                                pair_result_q <= 48'd0;
+                            end
+                        endcase
+                        st <= S_PAIR_WRITE;
+                    end
+                end
+                S_PAIR_WRITE: begin
+                    if (coeff_idx == 8'd127) begin
+                        st <= S_DONE;
+                    end else if (pair_rd0_valid && ((op_q == MLDSA_POLY_COPY) || pair_rd1_valid)) begin
+                        coeff_idx <= coeff_idx + 8'd1;
+                        unique case (op_q)
+                            MLDSA_POLY_COPY: begin
+                                pair_result_q <= pair_rd0_data;
+                            end
+                            MLDSA_POLY_ADD: begin
+                                pair_result_q <= {
+                                    modq_add(pair_rd0_data[47:24], pair_rd1_data[47:24]),
+                                    modq_add(pair_rd0_data[23:0],  pair_rd1_data[23:0])
+                                };
+                            end
+                            MLDSA_POLY_SUB: begin
+                                pair_result_q <= {
+                                    modq_sub(pair_rd0_data[47:24], pair_rd1_data[47:24]),
+                                    modq_sub(pair_rd0_data[23:0],  pair_rd1_data[23:0])
+                                };
+                            end
+                            default: begin
+                                pair_result_q <= 48'd0;
+                            end
+                        endcase
+                        st <= S_PAIR_WRITE;
+                    end
+                end
+                S_PAIR_NEXT: begin
+                    if (coeff_idx == 8'd127) begin
+                        st <= S_DONE;
+                    end else begin
+                        coeff_idx <= coeff_idx + 8'd1;
+                        st <= S_PAIR_READ;
                     end
                 end
                 S_WRITE: begin

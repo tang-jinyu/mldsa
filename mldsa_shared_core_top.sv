@@ -2,7 +2,8 @@
 `default_nettype none
 
 module mldsa_shared_core_top #(
-    parameter int BANKS = 32
+    parameter int BANKS = 65,
+    parameter bit EXPANDA_PRIVATE_XOF = 1'b0
 ) (
     input  wire                         clk,
     input  wire                         rst_n,
@@ -16,11 +17,19 @@ module mldsa_shared_core_top #(
     input  wire                         load_seed_we,
     input  wire [4:0]                   load_seed_addr,
     input  wire [7:0]                   load_seed_data,
+    input  wire                         load_expanded_seed_we,
+    input  wire [1:0]                   load_expanded_seed_sel,
+    input  wire [5:0]                   load_expanded_seed_addr,
+    input  wire [7:0]                   load_expanded_seed_data,
     input  wire                         standard_mode,
     input  wire                         load_ctx_we,
     input  wire [1:0]                   load_ctx_sel,
     input  wire [12:0]                  load_ctx_addr,
     input  wire [7:0]                   load_ctx_data,
+    input  wire                         load_sig_hash_we,
+    input  wire [5:0]                   load_sig_hash_addr,
+    input  wire [7:0]                   load_sig_hash_data,
+    input  wire [5:0]                   sig_hash_rd_addr,
     input  wire [12:0]                  message_len,
     input  wire                         start,
     input  wire [1:0]                   level_sel,
@@ -32,13 +41,15 @@ module mldsa_shared_core_top #(
     output wire [7:0]                   err_code,
     output wire [7:0]                   uop_dbg,
     output wire [7:0]                   state_dbg,
+    output wire [7:0]                   sig_hash_rd_data,
     output wire [23:0]                  host_rd_data
 );
     // Shared-core integration shell.
     // The ASAP7 frontdoor adapter keeps the outer byte/length contract stable,
     // while the inner datapath migrates toward the demo3-style shared core.
     mldsa_top_wrapper #(
-        .BANKS(BANKS)
+        .BANKS(BANKS),
+        .EXPANDA_PRIVATE_XOF(EXPANDA_PRIVATE_XOF)
     ) u_shared_core (
         .clk(clk),
         .rst_n(rst_n),
@@ -52,11 +63,19 @@ module mldsa_shared_core_top #(
         .load_seed_we(load_seed_we),
         .load_seed_addr(load_seed_addr),
         .load_seed_data(load_seed_data),
+        .load_expanded_seed_we(load_expanded_seed_we),
+        .load_expanded_seed_sel(load_expanded_seed_sel),
+        .load_expanded_seed_addr(load_expanded_seed_addr),
+        .load_expanded_seed_data(load_expanded_seed_data),
         .standard_mode(standard_mode),
         .load_ctx_we(load_ctx_we),
         .load_ctx_sel(load_ctx_sel),
         .load_ctx_addr(load_ctx_addr),
         .load_ctx_data(load_ctx_data),
+        .load_sig_hash_we(load_sig_hash_we),
+        .load_sig_hash_addr(load_sig_hash_addr),
+        .load_sig_hash_data(load_sig_hash_data),
+        .sig_hash_rd_addr(sig_hash_rd_addr),
         .message_len(message_len),
         .start(start),
         .level_sel(level_sel),
@@ -68,6 +87,7 @@ module mldsa_shared_core_top #(
         .err_code(err_code),
         .uop_dbg(uop_dbg),
         .state_dbg(state_dbg),
+        .sig_hash_rd_data(sig_hash_rd_data),
         .host_rd_data(host_rd_data)
     );
 endmodule

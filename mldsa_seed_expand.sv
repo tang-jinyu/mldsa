@@ -19,6 +19,12 @@ module mldsa_seed_expand (
     input  wire        seed_we,
     input  wire [4:0]  seed_addr,
     input  wire [7:0]  seed_data,
+    input  wire [3:0]  cfg_k,
+    input  wire [3:0]  cfg_l,
+    input  wire        expanded_we,
+    input  wire [1:0]  expanded_sel,
+    input  wire [5:0]  expanded_addr,
+    input  wire [7:0]  expanded_data,
     input  wire        start,
     output logic       busy,
     output logic       done,
@@ -29,6 +35,9 @@ module mldsa_seed_expand (
     output logic [7:0] rho_prime_rd_data,
     input  wire [4:0]  k_rd_addr,
     output logic [7:0] k_rd_data,
+    output logic [7:0] rho_shadow_rd_data,
+    output logic [7:0] rho_prime_shadow_rd_data,
+    output logic [7:0] k_shadow_rd_data,
     output logic       xof_start_o,
     output logic       xof_stop_o,
     output logic       xof_mode_shake256_o,
@@ -66,6 +75,9 @@ module mldsa_seed_expand (
     logic       k_wr_en;
     logic [4:0] k_wr_addr;
     logic [7:0] k_wr_data;
+    logic [7:0] rho_shadow [0:31];
+    logic [7:0] rho_prime_shadow [0:63];
+    logic [7:0] k_shadow [0:31];
 
     mldsa_byte_store_async #(.DEPTH(32), .ADDR_W(5)) u_rho_store (
         .clk    (clk),
@@ -95,34 +107,43 @@ module mldsa_seed_expand (
     );
 
     always_comb begin
+        rho_shadow_rd_data       = rho_shadow[rho_rd_addr];
+        rho_prime_shadow_rd_data = rho_prime_shadow[rho_prime_rd_addr];
+        k_shadow_rd_data         = k_shadow[k_rd_addr];
+
         xof_start_o          = (st == S_IDLE) && start;
         xof_stop_o           = (st == S_STOP);
         xof_mode_shake256_o  = 1'b1;
-        xof_abs_byte_data_o  = seed_mem[seed_idx[4:0]];
+        if (seed_idx < 6'd32) xof_abs_byte_data_o = seed_mem[seed_idx[4:0]];
+        else if (seed_idx == 6'd32) xof_abs_byte_data_o = {4'd0, cfg_k};
+        else xof_abs_byte_data_o = {4'd0, cfg_l};
         xof_abs_byte_valid_o = (st == S_ABSORB);
-        xof_abs_byte_last_o  = (seed_idx == 6'd31);
+        xof_abs_byte_last_o  = (seed_idx == 6'd33);
         xof_sq_byte_ready_o  = (st == S_SQUEEZE);
 
-        rho_wr_en          = 1'b0;
-        rho_wr_addr        = out_idx[4:0];
-        rho_wr_data        = xof_sq_byte_i;
-        rho_prime_wr_en    = 1'b0;
-        rho_prime_wr_addr  = out_idx[5:0] - 6'd32;
-        rho_prime_wr_data  = xof_sq_byte_i;
-        k_wr_en            = 1'b0;
-        k_wr_addr          = out_idx[4:0] - 5'd0;
-        k_wr_data          = xof_sq_byte_i;
+        rho_wr_en          = expanded_we && (expanded_sel == 2'd0);
+        rho_wr_addr        = expanded_addr[4:0];
+        rho_wr_data        = expanded_data;
+        rho_prime_wr_en    = expanded_we && (expanded_sel == 2'd1);
+        rho_prime_wr_addr  = expanded_addr;
+        rho_prime_wr_data  = expanded_data;
+        k_wr_en            = expanded_we && (expanded_sel == 2'd2);
+        k_wr_addr          = expanded_addr[4:0];
+        k_wr_data          = expanded_data;
 
         if (st == S_SQUEEZE && xof_sq_valid_i) begin
             if (out_idx < 8'd32) begin
                 rho_wr_en   = 1'b1;
                 rho_wr_addr = out_idx[4:0];
+                rho_wr_data = xof_sq_byte_i;
             end else if (out_idx < 8'd96) begin
                 rho_prime_wr_en   = 1'b1;
                 rho_prime_wr_addr = out_idx[5:0] - 6'd32;
+                rho_prime_wr_data = xof_sq_byte_i;
             end else begin
                 k_wr_en   = 1'b1;
                 k_wr_addr = out_idx[4:0];
+                k_wr_data = xof_sq_byte_i;
             end
         end
 
@@ -144,6 +165,16 @@ module mldsa_seed_expand (
                 seed_mem[seed_addr] <= seed_data;
             end
 
+            if (rho_wr_en) begin
+                rho_shadow[rho_wr_addr] <= rho_wr_data;
+            end
+            if (rho_prime_wr_en) begin
+                rho_prime_shadow[rho_prime_wr_addr] <= rho_prime_wr_data;
+            end
+            if (k_wr_en) begin
+                k_shadow[k_wr_addr] <= k_wr_data;
+            end
+
             unique case (st)
                 S_IDLE: begin
                     seed_idx <= 6'd0;
@@ -152,7 +183,13 @@ module mldsa_seed_expand (
                 end
                 S_ABSORB: begin
                     if (xof_abs_byte_valid_o && xof_abs_byte_ready_i) begin
-                        if (seed_idx == 6'd31) st <= S_WAIT_SQUEEZE;
+`ifdef MLDSA_DEBUG_DISPLAY
+                        if (seed_idx >= 6'd30) begin
+                            $display("SEED_EXPAND_ABS idx=%0d data=%02x last=%0b cfg_k=%0d cfg_l=%0d",
+                                     seed_idx, xof_abs_byte_data_o, xof_abs_byte_last_o, cfg_k, cfg_l);
+                        end
+`endif
+                        if (seed_idx == 6'd33) st <= S_WAIT_SQUEEZE;
                         else seed_idx <= seed_idx + 6'd1;
                     end
                 end
@@ -161,6 +198,11 @@ module mldsa_seed_expand (
                 end
                 S_SQUEEZE: begin
                     if (xof_sq_valid_i) begin
+`ifdef MLDSA_DEBUG_DISPLAY
+                        if (out_idx < 8'd8) begin
+                            $display("SEED_EXPAND_SQ idx=%0d data=%02x", out_idx, xof_sq_byte_i);
+                        end
+`endif
                         if (out_idx == 8'd127) st <= S_STOP;
                         else out_idx <= out_idx + 8'd1;
                     end

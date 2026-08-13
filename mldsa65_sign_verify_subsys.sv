@@ -131,7 +131,7 @@ module mldsa65_sign_verify_subsys #(
     logic                         dh_done;
 
     logic                         pack_start;
-    logic [2:0]                   pack_mode;
+    logic [3:0]                   pack_mode;
     logic [15:0]                  pack_item_count;
     logic [MLDSA_COEFF_W-1:0]     pack_coeff_in;
     logic                         pack_coeff_in_valid;

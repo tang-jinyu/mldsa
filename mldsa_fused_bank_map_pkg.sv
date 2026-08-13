@@ -2,9 +2,9 @@
 `default_nettype none
 
 package mldsa_fused_bank_map_pkg;
-    localparam int MLDSA_FUSED_BANKS_44 = 24;
-    localparam int MLDSA_FUSED_BANKS_65 = 32;
-    localparam int MLDSA_FUSED_BANKS_87 = 40;
+    localparam int MLDSA_FUSED_BANKS_44 = 40;
+    localparam int MLDSA_FUSED_BANKS_65 = 65;
+    localparam int MLDSA_FUSED_BANKS_87 = 73;
 
     localparam int MLDSA_FUSED_ADDR_W = 8;  // bank内地址8位 → 深度256 = N
     localparam int MLDSA_FUSED_COEFF_W = 24;// 系数24bit → 覆盖 q = 8,380,417 < 2^23

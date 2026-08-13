@@ -19,7 +19,12 @@ module mldsa_mul24x24 (
     input  wire [MLDSA_COEFF_W-1:0] b,
     output wire [47:0]              p
 );
+`ifdef MLDSA_TARGET_FPGA
+    (* use_dsp = "yes" *) wire [47:0] product_dsp = a * b;
+    assign p = product_dsp;
+`else
     assign p = a * b;
+`endif
 endmodule
 
 module mldsa_reduce_q_solinas (
@@ -168,9 +173,57 @@ module mldsa_modq_mul_pipe (
     logic [MLDSA_COEFF_W-1:0] b_q;
     logic [47:0]              product_comb;
     logic [47:0]              product_q;
+`ifdef MLDSA_FPGA_REDUCE_PIPE2
+    logic [37:0]              reduce_fold1_comb;
+    logic [28:0]              reduce_fold2_comb;
+    logic [28:0]              reduce_fold2_q;
+    logic [24:0]              reduce_fold3_comb;
+    logic [24:0]              reduce_fold4_comb;
+    logic [24:0]              reduce_corr_comb;
+    logic                     valid_fold_q;
+`else
     logic [MLDSA_COEFF_W-1:0] reduced_comb;
-    logic                     valid_mul_q;
-    logic                     valid_red_q;
+`endif
+    (* shreg_extract = "no", keep = "true" *) logic valid_mul_q;
+    (* shreg_extract = "no", keep = "true" *) logic valid_red_q;
+`ifdef MLDSA_TARGET_FPGA
+    (* shreg_extract = "no", keep = "true" *) logic [MLDSA_COEFF_W-1:0] reduced_q;
+    (* shreg_extract = "no", keep = "true" *) logic valid_out_q;
+`endif
+`ifdef MLDSA_FPGA_REDUCE_PIPE2
+
+    function automatic logic [37:0] mul_8191_25(input logic [24:0] h);
+        logic [37:0] hh;
+        begin
+            hh = {13'd0, h};
+            mul_8191_25 = (hh << 13) - hh;
+        end
+    endfunction
+
+    function automatic logic [28:0] mul_8191_15(input logic [14:0] h);
+        logic [28:0] hh;
+        begin
+            hh = {14'd0, h};
+            mul_8191_15 = (hh << 13) - hh;
+        end
+    endfunction
+
+    function automatic logic [24:0] mul_8191_6(input logic [5:0] h);
+        logic [24:0] hh;
+        begin
+            hh = {19'd0, h};
+            mul_8191_6 = (hh << 13) - hh;
+        end
+    endfunction
+
+    function automatic logic [24:0] mul_8191_2(input logic [1:0] h);
+        logic [24:0] hh;
+        begin
+            hh = {23'd0, h};
+            mul_8191_2 = (hh << 13) - hh;
+        end
+    endfunction
+`endif
 
     assign in_ready = 1'b1;
 
@@ -180,10 +233,25 @@ module mldsa_modq_mul_pipe (
         .p(product_comb)
     );
 
+`ifdef MLDSA_FPGA_REDUCE_PIPE2
+    always_comb begin
+        reduce_fold1_comb = {15'd0, product_q[22:0]} + mul_8191_25(product_q[47:23]);
+        reduce_fold2_comb = {6'd0, reduce_fold1_comb[22:0]} +
+                            mul_8191_15(reduce_fold1_comb[37:23]);
+        reduce_fold3_comb = {2'd0, reduce_fold2_q[22:0]} +
+                            mul_8191_6(reduce_fold2_q[28:23]);
+        reduce_fold4_comb = {2'd0, reduce_fold3_comb[22:0]} +
+                            mul_8191_2(reduce_fold3_comb[24:23]);
+        reduce_corr_comb  = (reduce_fold4_comb >= {1'b0, MLDSA_Q_COEFF}) ?
+                            (reduce_fold4_comb - {1'b0, MLDSA_Q_COEFF}) :
+                            reduce_fold4_comb;
+    end
+`else
     mldsa_reduce_q_solinas u_reduce (
         .x(product_q),
         .r(reduced_comb)
     );
+`endif
 
     always_ff @(posedge clk) begin
         if (!rst_n) begin
@@ -193,6 +261,14 @@ module mldsa_modq_mul_pipe (
             result      <= '0;
             valid_mul_q <= 1'b0;
             valid_red_q <= 1'b0;
+`ifdef MLDSA_FPGA_REDUCE_PIPE2
+            reduce_fold2_q <= '0;
+            valid_fold_q   <= 1'b0;
+`endif
+`ifdef MLDSA_TARGET_FPGA
+            reduced_q   <= '0;
+            valid_out_q <= 1'b0;
+`endif
             out_valid   <= 1'b0;
         end else begin
             if (in_valid) begin
@@ -201,10 +277,26 @@ module mldsa_modq_mul_pipe (
             end
 
             product_q   <= product_comb;
-            result      <= reduced_comb;
             valid_mul_q <= in_valid;
+`ifdef MLDSA_FPGA_REDUCE_PIPE2
+            reduce_fold2_q <= reduce_fold2_comb;
+            valid_fold_q   <= valid_mul_q;
+            reduced_q      <= reduce_corr_comb[MLDSA_COEFF_W-1:0];
+            valid_red_q    <= valid_fold_q;
+            result      <= reduced_q;
+            valid_out_q <= valid_red_q;
+            out_valid   <= valid_out_q;
+`elsif MLDSA_TARGET_FPGA
             valid_red_q <= valid_mul_q;
+            reduced_q   <= reduced_comb;
+            result      <= reduced_q;
+            valid_out_q <= valid_red_q;
+            out_valid   <= valid_out_q;
+`else
+            valid_red_q <= valid_mul_q;
+            result      <= reduced_comb;
             out_valid   <= valid_red_q;
+`endif
         end
     end
 endmodule

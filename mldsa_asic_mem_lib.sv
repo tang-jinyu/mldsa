@@ -110,6 +110,9 @@ module mldsa_ntt_poly_mem_compat (
     input  wire                     load_we,
     input  wire [7:0]               load_addr,
     input  wire [MLDSA_COEFF_W-1:0] load_data,
+    input  wire                     load_pair_we,
+    input  wire [6:0]               load_pair_addr,
+    input  wire [47:0]              load_pair_data,
     input  wire                     src_bank_sel,
     input  wire                     src_rd_req,
     input  wire                     src_rd_dual,
@@ -127,8 +130,85 @@ module mldsa_ntt_poly_mem_compat (
     input  wire [MLDSA_COEFF_W-1:0] dst_wr1_data,
     input  wire                     host_bank_sel,
     input  wire [7:0]               host_rd_addr,
-    output logic [MLDSA_COEFF_W-1:0] host_rd_data
+    output logic [MLDSA_COEFF_W-1:0] host_rd_data,
+    input  wire [6:0]               host_pair_rd_addr,
+    output logic [47:0]             host_pair_rd_data
 );
+`ifdef MLDSA_TARGET_FPGA
+    logic                    bank0_rd_valid;
+    logic [MLDSA_COEFF_W-1:0] bank0_rd0_data;
+    logic [MLDSA_COEFF_W-1:0] bank0_rd1_data;
+    logic [MLDSA_COEFF_W-1:0] bank0_host_rd_data;
+    logic [47:0]              bank0_host_pair_rd_data;
+    logic                    bank1_rd_valid;
+    logic [MLDSA_COEFF_W-1:0] bank1_rd0_data;
+    logic [MLDSA_COEFF_W-1:0] bank1_rd1_data;
+    logic [MLDSA_COEFF_W-1:0] bank1_host_rd_data;
+    logic [47:0]              bank1_host_pair_rd_data;
+
+    mldsa_ntt_tdp_bank u_bank0 (
+        .clk         (clk),
+        .load_we     (load_we),
+        .load_addr   (load_addr),
+        .load_data   (load_data),
+        .load_pair_we (load_pair_we),
+        .load_pair_addr(load_pair_addr),
+        .load_pair_data(load_pair_data),
+        .rd_req      (src_rd_req && !src_bank_sel),
+        .rd_dual     (src_rd_dual),
+        .rd0_addr    (src_rd0_addr),
+        .rd1_addr    (src_rd1_addr),
+        .rd_valid    (bank0_rd_valid),
+        .rd0_data    (bank0_rd0_data),
+        .rd1_data    (bank0_rd1_data),
+        .wr0_en      (dst_wr0_en && !dst_bank_sel),
+        .wr0_addr    (dst_wr0_addr),
+        .wr0_data    (dst_wr0_data),
+        .wr1_en      (dst_wr1_en && !dst_bank_sel),
+        .wr1_addr    (dst_wr1_addr),
+        .wr1_data    (dst_wr1_data),
+        .host_rd_addr(host_rd_addr),
+        .host_rd_data(bank0_host_rd_data),
+        .host_pair_rd_addr(host_pair_rd_addr),
+        .host_pair_rd_data(bank0_host_pair_rd_data)
+    );
+
+    mldsa_ntt_tdp_bank u_bank1 (
+        .clk         (clk),
+        .load_we     (1'b0),
+        .load_addr   (8'd0),
+        .load_data   ('0),
+        .load_pair_we (1'b0),
+        .load_pair_addr(7'd0),
+        .load_pair_data(48'd0),
+        .rd_req      (src_rd_req && src_bank_sel),
+        .rd_dual     (src_rd_dual),
+        .rd0_addr    (src_rd0_addr),
+        .rd1_addr    (src_rd1_addr),
+        .rd_valid    (bank1_rd_valid),
+        .rd0_data    (bank1_rd0_data),
+        .rd1_data    (bank1_rd1_data),
+        .wr0_en      (dst_wr0_en && dst_bank_sel),
+        .wr0_addr    (dst_wr0_addr),
+        .wr0_data    (dst_wr0_data),
+        .wr1_en      (dst_wr1_en && dst_bank_sel),
+        .wr1_addr    (dst_wr1_addr),
+        .wr1_data    (dst_wr1_data),
+        .host_rd_addr(host_rd_addr),
+        .host_rd_data(bank1_host_rd_data),
+        .host_pair_rd_addr(host_pair_rd_addr),
+        .host_pair_rd_data(bank1_host_pair_rd_data)
+    );
+
+    always_comb begin
+        src_rd_valid = src_bank_sel ? bank1_rd_valid : bank0_rd_valid;
+        src_rd0_data = src_bank_sel ? bank1_rd0_data : bank0_rd0_data;
+        src_rd1_data = src_bank_sel ? bank1_rd1_data : bank0_rd1_data;
+        host_rd_data = host_bank_sel ? bank1_host_rd_data : bank0_host_rd_data;
+        host_pair_rd_data = host_bank_sel ? bank1_host_pair_rd_data : bank0_host_pair_rd_data;
+    end
+`else
+`ifdef MLDSA_USE_CG_NTT_MEM
     logic                    bank0_rd_valid;
     logic [MLDSA_COEFF_W-1:0] bank0_rd0_data;
     logic [MLDSA_COEFF_W-1:0] bank0_rd1_data;
@@ -187,7 +267,149 @@ module mldsa_ntt_poly_mem_compat (
         src_rd0_data = src_bank_sel ? bank1_rd0_data : bank0_rd0_data;
         src_rd1_data = src_bank_sel ? bank1_rd1_data : bank0_rd1_data;
         host_rd_data = host_bank_sel ? bank1_host_rd_data : bank0_host_rd_data;
+        host_pair_rd_data = 48'd0;
     end
+`else
+    logic [MLDSA_COEFF_W-1:0] bank0_mem [0:255];
+    logic [MLDSA_COEFF_W-1:0] bank1_mem [0:255];
+    logic                     src_bank_sel_q;
+    logic [7:0]               src_rd0_addr_q;
+    logic [7:0]               src_rd1_addr_q;
+
+    always_ff @(posedge clk) begin
+        src_rd_valid   <= src_rd_req;
+        src_bank_sel_q <= src_bank_sel;
+        src_rd0_addr_q <= src_rd0_addr;
+        src_rd1_addr_q <= src_rd1_addr;
+
+        if (load_we) begin
+            bank0_mem[load_addr] <= load_data;
+        end
+        if (load_pair_we) begin
+            bank0_mem[{load_pair_addr, 1'b0}] <= load_pair_data[23:0];
+            bank0_mem[{load_pair_addr, 1'b1}] <= load_pair_data[47:24];
+        end
+
+        if (!dst_bank_sel) begin
+            if (dst_wr0_en) bank0_mem[dst_wr0_addr] <= dst_wr0_data;
+            if (dst_wr1_en) bank0_mem[dst_wr1_addr] <= dst_wr1_data;
+        end else begin
+            if (dst_wr0_en) bank1_mem[dst_wr0_addr] <= dst_wr0_data;
+            if (dst_wr1_en) bank1_mem[dst_wr1_addr] <= dst_wr1_data;
+        end
+    end
+
+    always_comb begin
+        src_rd0_data = src_bank_sel_q ? bank1_mem[src_rd0_addr_q] : bank0_mem[src_rd0_addr_q];
+        src_rd1_data = src_bank_sel_q ? bank1_mem[src_rd1_addr_q] : bank0_mem[src_rd1_addr_q];
+        host_rd_data = host_bank_sel ? bank1_mem[host_rd_addr] : bank0_mem[host_rd_addr];
+        host_pair_rd_data = host_bank_sel
+                           ? {bank1_mem[{host_pair_rd_addr, 1'b1}], bank1_mem[{host_pair_rd_addr, 1'b0}]}
+                           : {bank0_mem[{host_pair_rd_addr, 1'b1}], bank0_mem[{host_pair_rd_addr, 1'b0}]};
+    end
+`endif
+`endif
+endmodule
+
+module mldsa_ntt_tdp_bank (
+    input  wire                     clk,
+    input  wire                     load_we,
+    input  wire [7:0]               load_addr,
+    input  wire [MLDSA_COEFF_W-1:0] load_data,
+    input  wire                     load_pair_we,
+    input  wire [6:0]               load_pair_addr,
+    input  wire [47:0]              load_pair_data,
+    input  wire                     rd_req,
+    input  wire                     rd_dual,
+    input  wire [7:0]               rd0_addr,
+    input  wire [7:0]               rd1_addr,
+    output logic                    rd_valid,
+    output logic [MLDSA_COEFF_W-1:0] rd0_data,
+    output logic [MLDSA_COEFF_W-1:0] rd1_data,
+    input  wire                     wr0_en,
+    input  wire [7:0]               wr0_addr,
+    input  wire [MLDSA_COEFF_W-1:0] wr0_data,
+    input  wire                     wr1_en,
+    input  wire [7:0]               wr1_addr,
+    input  wire [MLDSA_COEFF_W-1:0] wr1_data,
+    input  wire [7:0]               host_rd_addr,
+    output logic [MLDSA_COEFF_W-1:0] host_rd_data,
+    input  wire [6:0]               host_pair_rd_addr,
+    output logic [47:0]             host_pair_rd_data
+);
+    (* ram_style = "block" *) logic [MLDSA_COEFF_W-1:0] mem [0:255];
+    logic [7:0] port_a_addr;
+    logic [7:0] port_b_addr;
+    logic [MLDSA_COEFF_W-1:0] port_a_din;
+    logic [MLDSA_COEFF_W-1:0] port_b_din;
+    logic port_a_we;
+    logic port_b_we;
+
+    always_comb begin
+        port_a_we   = load_we || load_pair_we || wr0_en;
+        port_a_addr = host_rd_addr;
+        port_a_din  = '0;
+
+        if (load_we) begin
+            port_a_addr = load_addr;
+            port_a_din  = load_data;
+        end else if (load_pair_we) begin
+            port_a_addr = {load_pair_addr, 1'b0};
+            port_a_din  = load_pair_data[23:0];
+        end else if (wr0_en) begin
+            port_a_addr = wr0_addr;
+            port_a_din  = wr0_data;
+        end else if (rd_req) begin
+            port_a_addr = rd0_addr;
+        end
+
+        port_b_we   = load_pair_we || wr1_en;
+        port_b_addr = {host_pair_rd_addr, 1'b1};
+        port_b_din  = load_pair_data[47:24];
+
+        if (load_pair_we) begin
+            port_b_addr = {load_pair_addr, 1'b1};
+        end else if (wr1_en) begin
+            port_b_addr = wr1_addr;
+            port_b_din  = wr1_data;
+        end else if (rd_req && rd_dual) begin
+            port_b_addr = rd1_addr;
+        end
+    end
+
+    always_ff @(posedge clk) begin
+        rd_valid <= rd_req;
+    end
+
+`ifndef SYNTHESIS
+    always_ff @(posedge clk) begin
+        if (port_a_we) begin
+            mem[port_a_addr] <= port_a_din;
+        end
+        if (port_b_we) begin
+            mem[port_b_addr] <= port_b_din;
+        end
+        rd0_data <= mem[port_a_addr];
+        rd1_data <= mem[port_b_addr];
+    end
+`else
+    always_ff @(posedge clk) begin
+        if (port_a_we) begin
+            mem[port_a_addr] <= port_a_din;
+        end
+        rd0_data <= mem[port_a_addr];
+    end
+
+    always_ff @(posedge clk) begin
+        if (port_b_we) begin
+            mem[port_b_addr] <= port_b_din;
+        end
+        rd1_data <= mem[port_b_addr];
+    end
+`endif
+
+    assign host_rd_data = rd0_data;
+    assign host_pair_rd_data = {rd1_data, rd0_data};
 endmodule
 
 module mldsa_ntt_cg_bank (
@@ -488,6 +710,8 @@ endmodule
 
 module mldsa_sampler_challenge_mem_compat (
     input  wire                     clk,
+    input  wire                     rst_n,
+    input  wire                     clear_all,
     input  wire                     clr_we,
     input  wire [7:0]               clr_addr,
     input  wire [MLDSA_COEFF_W-1:0] clr_data,
@@ -502,169 +726,57 @@ module mldsa_sampler_challenge_mem_compat (
     input  wire [7:0]               wr1_addr,
     input  wire [MLDSA_COEFF_W-1:0] wr1_data
 );
-`ifdef SYNTHESIS
-    function automatic logic [1:0] mem_sel(input logic [7:0] a);
+    logic [1:0]               mem_code [0:MLDSA_N-1];
+    logic [MLDSA_N-1:0]       valid_mask;
+
+    function automatic logic [1:0] encode_challenge(input logic [MLDSA_COEFF_W-1:0] value);
         begin
-            mem_sel = {a[7], a[0]};
+            if (value == 24'd1) begin
+                encode_challenge = 2'b01;
+            end else if (value == (MLDSA_Q_COEFF - 24'd1)) begin
+                encode_challenge = 2'b10;
+            end else begin
+                encode_challenge = 2'b00;
+            end
         end
     endfunction
 
-    function automatic logic [5:0] mem_off(input logic [7:0] a);
+    function automatic logic [MLDSA_COEFF_W-1:0] decode_challenge(input logic [1:0] code);
         begin
-            mem_off = a[6:1];
+            unique case (code)
+                2'b01:   decode_challenge = 24'd1;
+                2'b10:   decode_challenge = MLDSA_Q_COEFF - 24'd1;
+                default: decode_challenge = '0;
+            endcase
         end
     endfunction
 
-    logic [1:0] rd_sel_q;
-    logic [MLDSA_COEFF_W-1:0] mem0_rd_q;
-    logic [MLDSA_COEFF_W-1:0] mem1_rd_q;
-    logic [MLDSA_COEFF_W-1:0] mem2_rd_q;
-    logic [MLDSA_COEFF_W-1:0] mem3_rd_q;
-    logic mem0_wr_en, mem1_wr_en, mem2_wr_en, mem3_wr_en;
-    logic [5:0] mem0_wr_addr, mem1_wr_addr, mem2_wr_addr, mem3_wr_addr;
-    logic [MLDSA_COEFF_W-1:0] mem0_wr_data, mem1_wr_data, mem2_wr_data, mem3_wr_data;
-    logic challenge_rd_en;
-    logic [7:0] challenge_rd_addr_sel;
-
-    always_comb begin
-        challenge_rd_en = 1'b1;
-        challenge_rd_addr_sel = rd0_addr;
-        if (rd0_addr == rd1_addr) begin
-            challenge_rd_addr_sel = rd0_addr;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            valid_mask <= '0;
+        end else if (clear_all) begin
+            valid_mask <= '0;
         end
-
-        mem0_wr_en   = clr_we && (mem_sel(clr_addr) == 2'd0);
-        mem0_wr_addr = mem_off(clr_addr);
-        mem0_wr_data = clr_data;
-        if (wr0_en && (mem_sel(wr0_addr) == 2'd0)) begin
-            mem0_wr_en   = 1'b1;
-            mem0_wr_addr = mem_off(wr0_addr);
-            mem0_wr_data = wr0_data;
+        else begin
+            if (clr_we) begin
+                mem_code[clr_addr] <= encode_challenge(clr_data);
+                valid_mask[clr_addr] <= (clr_data != '0);
+            end
+            if (wr0_en) begin
+                mem_code[wr0_addr] <= encode_challenge(wr0_data);
+                valid_mask[wr0_addr] <= (wr0_data != '0);
+            end
+            if (wr1_en) begin
+                mem_code[wr1_addr] <= encode_challenge(wr1_data);
+                valid_mask[wr1_addr] <= (wr1_data != '0);
+            end
         end
-        if (wr1_en && (mem_sel(wr1_addr) == 2'd0)) begin
-            mem0_wr_en   = 1'b1;
-            mem0_wr_addr = mem_off(wr1_addr);
-            mem0_wr_data = wr1_data;
-        end
-
-        mem1_wr_en   = clr_we && (mem_sel(clr_addr) == 2'd1);
-        mem1_wr_addr = mem_off(clr_addr);
-        mem1_wr_data = clr_data;
-        if (wr0_en && (mem_sel(wr0_addr) == 2'd1)) begin
-            mem1_wr_en   = 1'b1;
-            mem1_wr_addr = mem_off(wr0_addr);
-            mem1_wr_data = wr0_data;
-        end
-        if (wr1_en && (mem_sel(wr1_addr) == 2'd1)) begin
-            mem1_wr_en   = 1'b1;
-            mem1_wr_addr = mem_off(wr1_addr);
-            mem1_wr_data = wr1_data;
-        end
-
-        mem2_wr_en   = clr_we && (mem_sel(clr_addr) == 2'd2);
-        mem2_wr_addr = mem_off(clr_addr);
-        mem2_wr_data = clr_data;
-        if (wr0_en && (mem_sel(wr0_addr) == 2'd2)) begin
-            mem2_wr_en   = 1'b1;
-            mem2_wr_addr = mem_off(wr0_addr);
-            mem2_wr_data = wr0_data;
-        end
-        if (wr1_en && (mem_sel(wr1_addr) == 2'd2)) begin
-            mem2_wr_en   = 1'b1;
-            mem2_wr_addr = mem_off(wr1_addr);
-            mem2_wr_data = wr1_data;
-        end
-
-        mem3_wr_en   = clr_we && (mem_sel(clr_addr) == 2'd3);
-        mem3_wr_addr = mem_off(clr_addr);
-        mem3_wr_data = clr_data;
-        if (wr0_en && (mem_sel(wr0_addr) == 2'd3)) begin
-            mem3_wr_en   = 1'b1;
-            mem3_wr_addr = mem_off(wr0_addr);
-            mem3_wr_data = wr0_data;
-        end
-        if (wr1_en && (mem_sel(wr1_addr) == 2'd3)) begin
-            mem3_wr_en   = 1'b1;
-            mem3_wr_addr = mem_off(wr1_addr);
-            mem3_wr_data = wr1_data;
-        end
-    end
-
-    mldsa_sp_sram64x24_wrapper u_challenge_mem0 (
-        .clk     (clk),
-        .rd_en   (challenge_rd_en && (mem_sel(challenge_rd_addr_sel) == 2'd0)),
-        .rd_addr (mem_off(challenge_rd_addr_sel)),
-        .rd_data (mem0_rd_q),
-        .wr_en   (mem0_wr_en),
-        .wr_addr (mem0_wr_addr),
-        .wr_data (mem0_wr_data),
-        .dbg_addr(mem_off(rd1_addr)),
-        .dbg_data()
-    );
-
-    mldsa_sp_sram64x24_wrapper u_challenge_mem1 (
-        .clk     (clk),
-        .rd_en   (challenge_rd_en && (mem_sel(challenge_rd_addr_sel) == 2'd1)),
-        .rd_addr (mem_off(challenge_rd_addr_sel)),
-        .rd_data (mem1_rd_q),
-        .wr_en   (mem1_wr_en),
-        .wr_addr (mem1_wr_addr),
-        .wr_data (mem1_wr_data),
-        .dbg_addr(mem_off(rd1_addr)),
-        .dbg_data()
-    );
-
-    mldsa_sp_sram64x24_wrapper u_challenge_mem2 (
-        .clk     (clk),
-        .rd_en   (challenge_rd_en && (mem_sel(challenge_rd_addr_sel) == 2'd2)),
-        .rd_addr (mem_off(challenge_rd_addr_sel)),
-        .rd_data (mem2_rd_q),
-        .wr_en   (mem2_wr_en),
-        .wr_addr (mem2_wr_addr),
-        .wr_data (mem2_wr_data),
-        .dbg_addr(mem_off(rd1_addr)),
-        .dbg_data()
-    );
-
-    mldsa_sp_sram64x24_wrapper u_challenge_mem3 (
-        .clk     (clk),
-        .rd_en   (challenge_rd_en && (mem_sel(challenge_rd_addr_sel) == 2'd3)),
-        .rd_addr (mem_off(challenge_rd_addr_sel)),
-        .rd_data (mem3_rd_q),
-        .wr_en   (mem3_wr_en),
-        .wr_addr (mem3_wr_addr),
-        .wr_data (mem3_wr_data),
-        .dbg_addr(mem_off(rd1_addr)),
-        .dbg_data()
-    );
-
-    always_ff @(posedge clk) begin
-        rd_sel_q <= mem_sel(challenge_rd_addr_sel);
     end
 
     always_comb begin
-        unique case (rd_sel_q)
-            2'd0: rd0_data = mem0_rd_q;
-            2'd1: rd0_data = mem1_rd_q;
-            2'd2: rd0_data = mem2_rd_q;
-            default: rd0_data = mem3_rd_q;
-        endcase
-        rd1_data = rd0_data;
+        rd0_data = valid_mask[rd0_addr] ? decode_challenge(mem_code[rd0_addr]) : '0;
+        rd1_data = valid_mask[rd1_addr] ? decode_challenge(mem_code[rd1_addr]) : '0;
     end
-`else
-    logic [MLDSA_COEFF_W-1:0] mem [0:MLDSA_N-1];
-
-    always_ff @(posedge clk) begin
-        if (clr_we) mem[clr_addr] <= clr_data;
-        if (wr0_en) mem[wr0_addr] <= wr0_data;
-        if (wr1_en) mem[wr1_addr] <= wr1_data;
-    end
-
-    always_comb begin
-        rd0_data = mem[rd0_addr];
-        rd1_data = mem[rd1_addr];
-    end
-`endif
 endmodule
 
 `default_nettype wire

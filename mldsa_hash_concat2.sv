@@ -39,8 +39,11 @@ module mldsa_hash_concat2 #(
     input  wire                xof_state_squeezing_i
 );
 
-    typedef enum logic [2:0] {
+    typedef enum logic [3:0] {
         S_IDLE,
+        S_ABSORB_PRIME,
+        S_ABSORB_WAIT,
+        S_ABSORB_LOAD,
         S_ABSORB,
         S_WAIT_SQUEEZE,
         S_SQUEEZE,
@@ -54,12 +57,14 @@ module mldsa_hash_concat2 #(
     logic [7:0] a_rd_data;
     logic [7:0] b_rd_data;
     logic [15:0] abs_idx;
+    logic [15:0] abs_rd_idx;
     logic [15:0] out_idx;
     logic [15:0] a_len_q;
     logic [15:0] b_len_q;
     logic [15:0] out_len_q;
     logic [15:0] total_len_q;
     logic [15:0] b_abs_idx;
+    logic [7:0]  abs_data_q;
     logic [A_ADDR_W-1:0] a_rd_addr;
     logic [B_ADDR_W-1:0] b_rd_addr;
     logic [O_ADDR_W-1:0] out_wr_addr;
@@ -98,11 +103,11 @@ module mldsa_hash_concat2 #(
         xof_mode_shake256_o = 1'b1;
         xof_abs_byte_valid_o = (st == S_ABSORB);
         xof_abs_byte_last_o  = (abs_idx == total_len_q - 16'd1);
-        b_abs_idx = abs_idx - a_len_q;
-        a_rd_addr = abs_idx[A_ADDR_W-1:0];
+        b_abs_idx = abs_rd_idx - a_len_q;
+        a_rd_addr = abs_rd_idx[A_ADDR_W-1:0];
         b_rd_addr = b_abs_idx[B_ADDR_W-1:0];
         out_wr_addr = out_idx[O_ADDR_W-1:0];
-        xof_abs_byte_data_o = (abs_idx < a_len_q) ? a_rd_data : b_rd_data;
+        xof_abs_byte_data_o = abs_data_q;
         xof_sq_byte_ready_o = (st == S_SQUEEZE);
         out_wr_en = (st == S_SQUEEZE) && xof_sq_valid_i;
 
@@ -113,11 +118,13 @@ module mldsa_hash_concat2 #(
         if (!rst_n) begin
             st          <= S_IDLE;
             abs_idx     <= 16'd0;
+            abs_rd_idx  <= 16'd0;
             out_idx     <= 16'd0;
             a_len_q     <= 16'd0;
             b_len_q     <= 16'd0;
             out_len_q   <= 16'd0;
             total_len_q <= 16'd0;
+            abs_data_q  <= 8'd0;
             done        <= 1'b0;
             error       <= 1'b0;
         end else begin
@@ -126,8 +133,10 @@ module mldsa_hash_concat2 #(
 
             unique case (st)
                 S_IDLE: begin
-                    abs_idx <= 16'd0;
-                    out_idx <= 16'd0;
+                    abs_idx    <= 16'd0;
+                    abs_rd_idx <= 16'd0;
+                    out_idx    <= 16'd0;
+                    abs_data_q <= 8'd0;
                     if (start) begin
                         if ((a_len == 16'd0 && b_len == 16'd0) || out_len == 16'd0 ||
                             a_len > A_BYTES || b_len > B_BYTES || out_len > OUT_BYTES) begin
@@ -137,14 +146,37 @@ module mldsa_hash_concat2 #(
                             b_len_q     <= b_len;
                             out_len_q   <= out_len;
                             total_len_q <= a_len + b_len;
-                            st          <= S_ABSORB;
+                            st          <= S_ABSORB_PRIME;
                         end
                     end
                 end
+                S_ABSORB_PRIME: begin
+                    abs_rd_idx <= 16'd0;
+                    st         <= S_ABSORB_WAIT;
+                end
+                S_ABSORB_WAIT: begin
+                    st <= S_ABSORB_LOAD;
+                end
+                S_ABSORB_LOAD: begin
+                    abs_data_q <= (abs_idx < a_len_q) ? a_rd_data : b_rd_data;
+                    if (abs_idx != total_len_q - 16'd1) begin
+                        abs_rd_idx <= abs_idx + 16'd1;
+                    end
+                    st <= S_ABSORB;
+                end
                 S_ABSORB: begin
                     if (xof_abs_byte_valid_o && xof_abs_byte_ready_i) begin
+`ifdef MLDSA_DEBUG_DISPLAY
+                        if (abs_idx < 16'd96 || abs_idx >= total_len_q - 16'd24) begin
+                            $display("HASHC_ABS idx=%0d data=%02x last=%0b rd=%0d a_len=%0d b_len=%0d",
+                                     abs_idx, xof_abs_byte_data_o, xof_abs_byte_last_o, abs_rd_idx, a_len_q, b_len_q);
+                        end
+`endif
                         if (abs_idx == total_len_q - 16'd1) st <= S_WAIT_SQUEEZE;
-                        else abs_idx <= abs_idx + 16'd1;
+                        else begin
+                            abs_idx <= abs_idx + 16'd1;
+                            st      <= S_ABSORB_LOAD;
+                        end
                     end
                 end
                 S_WAIT_SQUEEZE: begin
@@ -152,6 +184,11 @@ module mldsa_hash_concat2 #(
                 end
                 S_SQUEEZE: begin
                     if (xof_sq_valid_i) begin
+`ifdef MLDSA_DEBUG_DISPLAY
+                        if (out_idx < 16'd16) begin
+                            $display("HASHC_SQ idx=%0d data=%02x", out_idx, xof_sq_byte_i);
+                        end
+`endif
                         if (out_idx == out_len_q - 16'd1) st <= S_STOP;
                         else out_idx <= out_idx + 16'd1;
                     end

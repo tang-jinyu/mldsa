@@ -33,3 +33,4 @@ mldsa/shared_core/rtl/mldsa65_sign_verify_subsys.sv
 mldsa/shared_core/rtl/mldsa65_full_core.sv
 mldsa/shared_core/rtl/mldsa_top_wrapper.sv
 mldsa/shared_core/rtl/mldsa_top_axi_lite.sv
+mldsa/shared_core/rtl/mldsa_top_axi_lite_fpga_perf.sv

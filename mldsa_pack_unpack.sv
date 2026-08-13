@@ -7,7 +7,7 @@ module mldsa_pack_unpack (
     input  wire                         clk,
     input  wire                         rst_n,
     input  wire                         start,
-    input  wire [2:0]                   mode,
+    input  wire [3:0]                   mode,
     input  wire [15:0]                  item_count,
     input  wire [MLDSA_COEFF_W-1:0]     coeff_in,
     input  wire                         coeff_in_valid,
@@ -42,6 +42,7 @@ module mldsa_pack_unpack (
         S_BITUNPACK_WAIT,
         S_BITUNPACK_EMIT,
         S_VARPACK_WAIT,
+        S_VARPACK_ACCUM,
         S_VARPACK_EMIT,
         S_VARPACK_FLUSH,
         S_VARUNPACK_WAIT,
@@ -51,7 +52,7 @@ module mldsa_pack_unpack (
     } state_e;
 
     state_e st;
-    logic [2:0] mode_q;
+    logic [3:0] mode_q;
     logic [15:0] item_count_q;
     logic [15:0] item_idx;
     logic [MLDSA_COEFF_W-1:0] coeff_q;
@@ -74,11 +75,13 @@ module mldsa_pack_unpack (
         var_coeff_bits = {8'd0, (coeff_in & var_word_mask)};
     end
 
-    function automatic logic [4:0] packed_word_bits(input logic [2:0] pack_mode);
+    function automatic logic [4:0] packed_word_bits(input logic [3:0] pack_mode);
         begin
             unique case (pack_mode)
                 MLDSA_PACK_NIBBLE4_PACK,
                 MLDSA_PACK_NIBBLE4_UNPACK: packed_word_bits = 5'd4;
+                MLDSA_PACK_BITS6_PACK,
+                MLDSA_PACK_BITS6_UNPACK:    packed_word_bits = 5'd6;
                 MLDSA_PACK_BITS10_PACK,
                 MLDSA_PACK_BITS10_UNPACK:  packed_word_bits = 5'd10;
                 default:                   packed_word_bits = 5'd0;
@@ -151,8 +154,8 @@ module mldsa_pack_unpack (
                         else if (mode == MLDSA_PACK_COEFF24_UNPACK) st <= S_UNPACK_WAIT0;
                         else if (mode == MLDSA_PACK_BIT1_PACK) st <= S_BITPACK_WAIT;
                         else if (mode == MLDSA_PACK_BIT1_UNPACK) st <= S_BITUNPACK_WAIT;
-                        else if (mode == MLDSA_PACK_NIBBLE4_PACK || mode == MLDSA_PACK_BITS10_PACK) st <= S_VARPACK_WAIT;
-                        else if (mode == MLDSA_PACK_NIBBLE4_UNPACK || mode == MLDSA_PACK_BITS10_UNPACK) st <= S_VARUNPACK_WAIT;
+                        else if (mode == MLDSA_PACK_NIBBLE4_PACK || mode == MLDSA_PACK_BITS6_PACK || mode == MLDSA_PACK_BITS10_PACK) st <= S_VARPACK_WAIT;
+                        else if (mode == MLDSA_PACK_NIBBLE4_UNPACK || mode == MLDSA_PACK_BITS6_UNPACK || mode == MLDSA_PACK_BITS10_UNPACK) st <= S_VARUNPACK_WAIT;
                         else st <= S_ERROR;
                     end
                 end
@@ -264,11 +267,21 @@ module mldsa_pack_unpack (
                 S_VARPACK_WAIT: begin
                     if (coeff_in_valid && coeff_in_ready) begin
                         coeff_q       <= coeff_in & var_word_mask;
+`ifdef MLDSA_TARGET_FPGA
+                        var_last_item <= (item_idx == item_count_q - 16'd1);
+                        st            <= S_VARPACK_ACCUM;
+`else
                         var_bitbuf    <= var_bitbuf | (var_coeff_bits << var_bitcount);
                         var_bitcount  <= var_bitcount + {1'b0, var_word_bits};
                         var_last_item <= (item_idx == item_count_q - 16'd1);
                         st            <= S_VARPACK_EMIT;
+`endif
                     end
+                end
+                S_VARPACK_ACCUM: begin
+                    var_bitbuf   <= var_bitbuf | ({8'd0, coeff_q} << var_bitcount);
+                    var_bitcount <= var_bitcount + {1'b0, var_word_bits};
+                    st           <= S_VARPACK_EMIT;
                 end
                 S_VARPACK_EMIT: begin
                     if ((var_bitcount >= 6'd8) && !byte_out_valid) begin

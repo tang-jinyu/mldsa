@@ -29,6 +29,9 @@ module mldsa_expanda_poly (
     input  wire [7:0]                xof_sq_byte_i,
     input  wire                      xof_sq_valid_i,
     output logic                     xof_sq_byte_ready_o,
+    input  wire [63:0]               xof_sq_word_i,
+    input  wire                      xof_sq_word_valid_i,
+    output logic                     xof_sq_word_ready_o,
     input  wire                      xof_state_squeezing_i
 );
 
@@ -54,18 +57,48 @@ module mldsa_expanda_poly (
     logic       sampler_done;
     logic       sampler_error;
     logic       sampler_byte_ready;
+    logic       sampler_word_ready;
+
+`ifdef MLDSA_XOF_WORD_SAMPLER
+    logic [7:0] fast_fifo [0:31];
+    logic [4:0] fast_fifo_rd_ptr;
+    logic [4:0] fast_fifo_wr_ptr;
+    logic [5:0] fast_fifo_count;
+    logic [8:0] fast_coeff_count;
+    logic       fast_coeff_valid;
+    logic [7:0] fast_coeff_index;
+    logic [MLDSA_COEFF_W-1:0] fast_coeff_data;
+    logic       fast_done;
+    logic       fast_pop;
+    logic       fast_word_push;
+    logic [7:0] fast_b0;
+    logic [7:0] fast_b1;
+    logic [7:0] fast_b2;
+    logic [22:0] fast_sample_value;
+`endif
 
     mldsa_sampler u_sampler (
         .clk             (clk),
         .rst_n           (rst_n),
+`ifdef MLDSA_XOF_WORD_SAMPLER
+        .start           (1'b0),
+`else
         .start           (sampler_start),
+`endif
         .sample_mode     (MLDSA_SAMPLE_UNIFORM),
         .eta             (3'd2),
         .gamma1_is_2p19  (1'b1),
         .tau             (6'd0),
         .byte_data       (xof_sq_byte_i),
+`ifdef MLDSA_XOF_WORD_SAMPLER
+        .byte_valid      (1'b0),
+`else
         .byte_valid      ((st == S_SQUEEZE) && xof_sq_valid_i),
+`endif
         .byte_ready      (sampler_byte_ready),
+        .word_data       (xof_sq_word_i),
+        .word_valid      (1'b0),
+        .word_ready      (sampler_word_ready),
         .coeff_index     (sampler_coeff_index),
         .coeff_data      (sampler_coeff_data),
         .coeff_valid     (sampler_coeff_valid),
@@ -75,6 +108,17 @@ module mldsa_expanda_poly (
         .error           (sampler_error),
         .state_dbg       ()
     );
+
+`ifdef MLDSA_XOF_WORD_SAMPLER
+    assign fast_word_push = (st == S_SQUEEZE) && xof_sq_word_valid_i && xof_sq_word_ready_o;
+    assign fast_pop = (st == S_SQUEEZE) && !fast_done &&
+                      (!fast_coeff_valid || coeff_ready) &&
+                      (fast_fifo_count >= 6'd3);
+    assign fast_b0 = fast_fifo[fast_fifo_rd_ptr];
+    assign fast_b1 = fast_fifo[fast_fifo_rd_ptr + 5'd1];
+    assign fast_b2 = fast_fifo[fast_fifo_rd_ptr + 5'd2];
+    assign fast_sample_value = {fast_b2[6:0], fast_b1, fast_b0};
+`endif
 
     always_comb begin
         xof_start_o = (st == S_IDLE) && start;
@@ -89,11 +133,23 @@ module mldsa_expanda_poly (
         endcase
 
         sampler_start = (st == S_SAMPLER_START);
+`ifdef MLDSA_XOF_WORD_SAMPLER
+        xof_sq_byte_ready_o = 1'b0;
+        xof_sq_word_ready_o = (st == S_SQUEEZE) && (fast_fifo_count <= 6'd24) && !fast_done;
+`else
         xof_sq_byte_ready_o = (st == S_SQUEEZE) && sampler_byte_ready;
+        xof_sq_word_ready_o = 1'b0;
+`endif
 
+`ifdef MLDSA_XOF_WORD_SAMPLER
+        coeff_index = fast_coeff_index;
+        coeff_data  = fast_coeff_data;
+        coeff_valid = (st == S_SQUEEZE) && fast_coeff_valid;
+`else
         coeff_index = sampler_coeff_index;
         coeff_data  = sampler_coeff_data;
         coeff_valid = (st == S_SQUEEZE) && sampler_coeff_valid;
+`endif
         busy = (st != S_IDLE) && (st != S_DONE) && (st != S_ERROR);
     end
 
@@ -103,9 +159,57 @@ module mldsa_expanda_poly (
             abs_idx <= 6'd0;
             done    <= 1'b0;
             error   <= 1'b0;
+`ifdef MLDSA_XOF_WORD_SAMPLER
+            fast_fifo_rd_ptr <= 5'd0;
+            fast_fifo_wr_ptr <= 5'd0;
+            fast_fifo_count  <= 6'd0;
+            fast_coeff_count <= 9'd0;
+            fast_coeff_valid <= 1'b0;
+            fast_coeff_index <= 8'd0;
+            fast_coeff_data  <= '0;
+            fast_done        <= 1'b0;
+`endif
         end else begin
             done  <= 1'b0;
             error <= 1'b0;
+
+`ifdef MLDSA_XOF_WORD_SAMPLER
+            if (fast_word_push) begin
+                fast_fifo[fast_fifo_wr_ptr + 5'd0] <= xof_sq_word_i[7:0];
+                fast_fifo[fast_fifo_wr_ptr + 5'd1] <= xof_sq_word_i[15:8];
+                fast_fifo[fast_fifo_wr_ptr + 5'd2] <= xof_sq_word_i[23:16];
+                fast_fifo[fast_fifo_wr_ptr + 5'd3] <= xof_sq_word_i[31:24];
+                fast_fifo[fast_fifo_wr_ptr + 5'd4] <= xof_sq_word_i[39:32];
+                fast_fifo[fast_fifo_wr_ptr + 5'd5] <= xof_sq_word_i[47:40];
+                fast_fifo[fast_fifo_wr_ptr + 5'd6] <= xof_sq_word_i[55:48];
+                fast_fifo[fast_fifo_wr_ptr + 5'd7] <= xof_sq_word_i[63:56];
+                fast_fifo_wr_ptr <= fast_fifo_wr_ptr + 5'd8;
+            end
+
+            if (fast_coeff_valid && coeff_ready) begin
+                fast_coeff_valid <= 1'b0;
+            end
+
+            if (fast_pop) begin
+                fast_fifo_rd_ptr <= fast_fifo_rd_ptr + 5'd3;
+                if ({1'b0, fast_sample_value} < MLDSA_Q_COEFF) begin
+                    fast_coeff_index <= fast_coeff_count[7:0];
+                    fast_coeff_data  <= {1'b0, fast_sample_value};
+                    fast_coeff_valid <= 1'b1;
+                    if (fast_coeff_count == 9'd255) begin
+                        fast_done <= 1'b1;
+                    end
+                    fast_coeff_count <= fast_coeff_count + 9'd1;
+                end
+            end
+
+            unique case ({fast_word_push, fast_pop})
+                2'b10: fast_fifo_count <= fast_fifo_count + 6'd8;
+                2'b01: fast_fifo_count <= fast_fifo_count - 6'd3;
+                2'b11: fast_fifo_count <= fast_fifo_count + 6'd5;
+                default: ;
+            endcase
+`endif
 
             if (rho_we && !busy) begin
                 rho_mem[rho_addr] <= rho_wdata;
@@ -114,6 +218,16 @@ module mldsa_expanda_poly (
             unique case (st)
                 S_IDLE: begin
                     abs_idx <= 6'd0;
+`ifdef MLDSA_XOF_WORD_SAMPLER
+                    fast_fifo_rd_ptr <= 5'd0;
+                    fast_fifo_wr_ptr <= 5'd0;
+                    fast_fifo_count  <= 6'd0;
+                    fast_coeff_count <= 9'd0;
+                    fast_coeff_valid <= 1'b0;
+                    fast_coeff_index <= 8'd0;
+                    fast_coeff_data  <= '0;
+                    fast_done        <= 1'b0;
+`endif
                     if (start) st <= S_ABSORB;
                 end
                 S_ABSORB: begin
@@ -129,8 +243,12 @@ module mldsa_expanda_poly (
                     st <= S_SQUEEZE;
                 end
                 S_SQUEEZE: begin
+`ifdef MLDSA_XOF_WORD_SAMPLER
+                    if (fast_done && !fast_coeff_valid) st <= S_STOP;
+`else
                     if (sampler_error) st <= S_ERROR;
                     else if (sampler_done) st <= S_STOP;
+`endif
                 end
                 S_STOP: begin
                     st <= S_DONE;

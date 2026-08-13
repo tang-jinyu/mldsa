@@ -11,6 +11,9 @@ module mldsa_ntt_poly_mem_compat (
     input  wire                      load_we,
     input  wire [7:0]                load_addr,
     input  wire [MLDSA_COEFF_W-1:0]  load_data,
+    input  wire                      load_pair_we,
+    input  wire [6:0]                load_pair_addr,
+    input  wire [47:0]               load_pair_data,
     input  wire                      src_bank_sel,
     input  wire                      src_rd_req,
     input  wire                      src_rd_dual,
@@ -28,7 +31,9 @@ module mldsa_ntt_poly_mem_compat (
     input  wire [MLDSA_COEFF_W-1:0]  dst_wr1_data,
     input  wire                      host_bank_sel,
     input  wire [7:0]                host_rd_addr,
-    output wire [MLDSA_COEFF_W-1:0]  host_rd_data
+    output wire [MLDSA_COEFF_W-1:0]  host_rd_data,
+    input  wire [6:0]                host_pair_rd_addr,
+    output wire [47:0]               host_pair_rd_data
 );
 endmodule
 
@@ -43,6 +48,8 @@ endmodule
 (* blackbox, syn_black_box, black_box *)
 module mldsa_sampler_challenge_mem_compat (
     input  wire                      clk,
+    input  wire                      rst_n,
+    input  wire                      clear_all,
     input  wire                      clr_we,
     input  wire [7:0]                clr_addr,
     input  wire [MLDSA_COEFF_W-1:0]  clr_data,

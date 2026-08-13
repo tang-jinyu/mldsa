@@ -19,9 +19,9 @@ module mldsa_ucode_ctrl (
     output logic [7:0] pc_dbg
 );
 
-    localparam logic [7:0] SIGN_ENTRY   = 8'd0;
+    localparam logic [7:0] SIGN_ENTRY   = 8'd1;
     localparam logic [7:0] SIGN_RETRY   = 8'd4;
-    localparam logic [7:0] VERIFY_ENTRY = 8'd16;
+    localparam logic [7:0] VERIFY_ENTRY = 8'd17;
     localparam logic [7:0] KEYGEN_ENTRY = 8'd32;
     logic [1:0] mode_q;
 
@@ -42,20 +42,20 @@ module mldsa_ucode_ctrl (
                 8'd11: rom = MLDSA_UOP_MAKE_HINT;
                 8'd12: rom = MLDSA_UOP_PACK_HINT;
                 8'd13: rom = MLDSA_UOP_SIGN_DONE;
-                8'd16: rom = MLDSA_UOP_SEED_EXPAND;
                 8'd17: rom = MLDSA_UOP_EXPAND_A;
                 8'd18: rom = MLDSA_UOP_HASH_MU;
-                8'd19: rom = MLDSA_UOP_MATVEC_AZ;
-                8'd20: rom = MLDSA_UOP_USE_HINT;
-                8'd21: rom = MLDSA_UOP_PACK_W1_VERIFY;
-                8'd22: rom = MLDSA_UOP_HASH_VERIFY_W1;
-                8'd23: rom = MLDSA_UOP_SAMPLE_C_VERIFY;
+                8'd19: rom = MLDSA_UOP_SAMPLE_C_VERIFY;
+                8'd20: rom = MLDSA_UOP_MATVEC_AZ;
+                8'd21: rom = MLDSA_UOP_USE_HINT;
+                8'd22: rom = MLDSA_UOP_PACK_W1_VERIFY;
+                8'd23: rom = MLDSA_UOP_HASH_VERIFY_W1;
                 8'd24: rom = MLDSA_UOP_COMPARE_C;
                 8'd25: rom = MLDSA_UOP_VERIFY_DONE;
                 8'd32: rom = MLDSA_UOP_SEED_EXPAND;
                 8'd33: rom = MLDSA_UOP_EXPAND_A;
-                8'd34: rom = MLDSA_UOP_PREP_T1;
-                8'd35: rom = MLDSA_UOP_KEYGEN_DONE;
+                8'd34: rom = MLDSA_UOP_SAMPLE_S1S2;
+                8'd35: rom = MLDSA_UOP_PREP_T1;
+                8'd36: rom = MLDSA_UOP_KEYGEN_DONE;
                 default: rom = MLDSA_UOP_NOP;
             endcase
         end

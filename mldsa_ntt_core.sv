@@ -4,7 +4,13 @@
 import mldsa_pkg::*;
 
 module mldsa_ntt_core #(
+`ifdef MLDSA_FPGA_REDUCE_PIPE2
+    parameter int BFU_LAT = 6
+`elsif MLDSA_TARGET_FPGA
+    parameter int BFU_LAT = 5
+`else
     parameter int BFU_LAT = 4
+`endif
 ) (
     input  wire                      clk,
     input  wire                      rst_n,
@@ -13,8 +19,13 @@ module mldsa_ntt_core #(
     input  wire                      load_we,
     input  wire [7:0]                load_addr,
     input  wire [MLDSA_COEFF_W-1:0]  load_data,
+    input  wire                      load_pair_we,
+    input  wire [6:0]                load_pair_addr,
+    input  wire [47:0]               load_pair_data,
     input  wire [7:0]                rd_addr,
     output wire [MLDSA_COEFF_W-1:0]  rd_data,
+    input  wire [6:0]                rd_pair_addr,
+    output wire [47:0]               rd_pair_data,
     output logic                     busy,
     output logic                     done,
     output logic [3:0]               state_dbg
@@ -70,6 +81,7 @@ module mldsa_ntt_core #(
     logic [7:0]               req_dst1_q;
     logic [MLDSA_COEFF_W-1:0] req_zeta_q;
 
+
     logic                     hold_valid_q;
     logic                     hold_scale_q;
     logic                     hold_inv_q;
@@ -99,10 +111,10 @@ module mldsa_ntt_core #(
     logic [MLDSA_COEFF_W-1:0] bfu_b_out;
     logic                     bfu_out_valid;
 
-    logic [BFU_LAT-1:0]                 wr_valid_pipe_q;
-    logic [BFU_LAT-1:0]                 wr_scale_pipe_q;
-    logic [7:0]                         wr_addr0_pipe_q [0:BFU_LAT-1];
-    logic [7:0]                         wr_addr1_pipe_q [0:BFU_LAT-1];
+    (* shreg_extract = "no" *) logic [BFU_LAT-1:0] wr_valid_pipe_q;
+    (* shreg_extract = "no" *) logic [BFU_LAT-1:0] wr_scale_pipe_q;
+    (* shreg_extract = "no" *) logic [7:0]         wr_addr0_pipe_q [0:BFU_LAT-1];
+    (* shreg_extract = "no" *) logic [7:0]         wr_addr1_pipe_q [0:BFU_LAT-1];
 
     logic [7:0]               fwd_rd0_addr;
     logic [7:0]               fwd_rd1_addr;
@@ -148,6 +160,9 @@ module mldsa_ntt_core #(
         .load_we     (load_we && (st == S_IDLE)),
         .load_addr   (load_addr),
         .load_data   (load_data),
+        .load_pair_we (load_pair_we && (st == S_IDLE)),
+        .load_pair_addr(load_pair_addr),
+        .load_pair_data(load_pair_data),
         .src_bank_sel(active_bank_q),
         .src_rd_req  (mem_src_rd_req),
         .src_rd_dual (mem_src_rd_dual),
@@ -165,7 +180,9 @@ module mldsa_ntt_core #(
         .dst_wr1_data(mem_dst_wr1_data),
         .host_bank_sel(active_bank_q),
         .host_rd_addr(rd_addr),
-        .host_rd_data(rd_data)
+        .host_rd_data(rd_data),
+        .host_pair_rd_addr(rd_pair_addr),
+        .host_pair_rd_data(rd_pair_data)
     );
 
     always_comb begin
@@ -175,28 +192,36 @@ module mldsa_ntt_core #(
         block_idx_calc_inv = pair_issue_idx_q / len_calc_inv;
         num_blocks_inv = 9'd128 >> stage_idx_q;
 
-        fwd_rd0_addr  = {pair_issue_idx_q[6:0], 1'b0};
-        fwd_rd1_addr  = {pair_issue_idx_q[6:0], 1'b1};
-        fwd_dst0_addr = pair_issue_idx_q;
-        fwd_dst1_addr = pair_issue_idx_q + 8'd128;
         zeta_idx_fwd  = (8'd1 << stage_idx_q) + block_idx_calc[7:0];
 
-        inv_rd0_addr  = pair_issue_idx_q;
-        inv_rd1_addr  = pair_issue_idx_q + 8'd128;
-        inv_dst0_addr = {pair_issue_idx_q[6:0], 1'b0};
-        inv_dst1_addr = {pair_issue_idx_q[6:0], 1'b1};
         zeta_idx_inv  = ((num_blocks_inv[7:0] << 1) - 8'd1) - block_idx_calc_inv[7:0];
 
         if (!op_inv_q) begin
             len         = len_calc_fwd;
-            block_start = block_idx_calc * len_calc_fwd;
+            block_start = block_idx_calc * (len_calc_fwd << 1);
             j_idx       = block_start + (pair_issue_idx_q % len_calc_fwd);
             k_idx       = zeta_idx_fwd;
+            fwd_rd0_addr  = j_idx[7:0];
+            fwd_rd1_addr  = j_idx + len_calc_fwd;
+            fwd_dst0_addr = j_idx[7:0];
+            fwd_dst1_addr = j_idx + len_calc_fwd;
+            inv_rd0_addr  = 8'd0;
+            inv_rd1_addr  = 8'd0;
+            inv_dst0_addr = 8'd0;
+            inv_dst1_addr = 8'd0;
         end else begin
             len         = len_calc_inv;
-            block_start = block_idx_calc_inv * len_calc_inv;
+            block_start = block_idx_calc_inv * (len_calc_inv << 1);
             j_idx       = block_start + (pair_issue_idx_q % len_calc_inv);
             k_idx       = zeta_idx_inv;
+            inv_rd0_addr  = j_idx[7:0];
+            inv_rd1_addr  = j_idx + len_calc_inv;
+            inv_dst0_addr = j_idx[7:0];
+            inv_dst1_addr = j_idx + len_calc_inv;
+            fwd_rd0_addr  = 8'd0;
+            fwd_rd1_addr  = 8'd0;
+            fwd_dst0_addr = 8'd0;
+            fwd_dst1_addr = 8'd0;
         end
     end
 
@@ -213,7 +238,7 @@ module mldsa_ntt_core #(
         bfu_in_valid = src_data_valid;
         bfu_inverse  = src_inv;
         bfu_a_in     = src_a;
-        bfu_b_in     = src_b;
+        bfu_b_in     = src_scale ? '0 : src_b;
         bfu_zeta     = src_zeta;
         issue_fire   = bfu_in_valid && bfu_in_ready;
 
@@ -319,6 +344,28 @@ module mldsa_ntt_core #(
             pending_q <= pending_q
                        + (issue_fire ? 10'd1 : 10'd0)
                        - (bfu_out_valid ? 10'd1 : 10'd0);
+
+`ifdef MLDSA_NTT_DEBUG
+            if (issue_fire && op_inv_q && !src_scale && stage_idx_q < 3'd2 && pair_issue_idx_q < 8'd8) begin
+                $display("[NTT_DBG] inv_issue t=%0t stage=%0d pair=%0d dst0=%0d dst1=%0d a=%0d b=%0d z=%0d",
+                         $time, stage_idx_q, pair_issue_idx_q, src_dst0, src_dst1, src_a, src_b, src_zeta);
+            end
+            if (bfu_out_valid && op_inv_q && !wr_scale_pipe_q[BFU_LAT-1] &&
+                stage_idx_q < 3'd2 && wr_addr0_pipe_q[BFU_LAT-1] < 8'd8) begin
+                $display("[NTT_DBG] inv_write t=%0t stage=%0d addr0=%0d data0=%0d addr1=%0d data1=%0d",
+                         $time, stage_idx_q, wr_addr0_pipe_q[BFU_LAT-1], bfu_a_out,
+                         wr_addr1_pipe_q[BFU_LAT-1], bfu_b_out);
+            end
+            if (issue_fire && op_inv_q && src_scale && scale_issue_idx_q < 9'd16) begin
+                $display("[NTT_DBG] scale_issue t=%0t idx=%0d a=%0d z=%0d",
+                         $time, scale_issue_idx_q, src_a, src_zeta);
+            end
+            if (bfu_out_valid && op_inv_q && wr_scale_pipe_q[BFU_LAT-1] &&
+                wr_addr0_pipe_q[BFU_LAT-1] < 8'd16) begin
+                $display("[NTT_DBG] scale_write t=%0t idx=%0d data=%0d",
+                         $time, wr_addr0_pipe_q[BFU_LAT-1], bfu_b_out);
+            end
+`endif
 
             unique case (st)
                 S_IDLE: begin

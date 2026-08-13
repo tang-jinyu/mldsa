@@ -78,14 +78,16 @@ package mldsa_pkg;
     localparam logic [1:0] MLDSA_CHECK_BYTEEQ   = 2'd2;//字节比较
     localparam logic [1:0] MLDSA_CHECK_COEFFEQ  = 2'd3;//系数比较
 
-    localparam logic [2:0] MLDSA_PACK_COEFF24_PACK   = 3'd0;
-    localparam logic [2:0] MLDSA_PACK_COEFF24_UNPACK = 3'd1;
-    localparam logic [2:0] MLDSA_PACK_BIT1_PACK      = 3'd2;
-    localparam logic [2:0] MLDSA_PACK_BIT1_UNPACK    = 3'd3;
-    localparam logic [2:0] MLDSA_PACK_NIBBLE4_PACK   = 3'd4;
-    localparam logic [2:0] MLDSA_PACK_NIBBLE4_UNPACK = 3'd5;
-    localparam logic [2:0] MLDSA_PACK_BITS10_PACK    = 3'd6;
-    localparam logic [2:0] MLDSA_PACK_BITS10_UNPACK  = 3'd7;
+    localparam logic [3:0] MLDSA_PACK_COEFF24_PACK   = 4'd0;
+    localparam logic [3:0] MLDSA_PACK_COEFF24_UNPACK = 4'd1;
+    localparam logic [3:0] MLDSA_PACK_BIT1_PACK      = 4'd2;
+    localparam logic [3:0] MLDSA_PACK_BIT1_UNPACK    = 4'd3;
+    localparam logic [3:0] MLDSA_PACK_NIBBLE4_PACK   = 4'd4;
+    localparam logic [3:0] MLDSA_PACK_NIBBLE4_UNPACK = 4'd5;
+    localparam logic [3:0] MLDSA_PACK_BITS10_PACK    = 4'd6;
+    localparam logic [3:0] MLDSA_PACK_BITS10_UNPACK  = 4'd7;
+    localparam logic [3:0] MLDSA_PACK_BITS6_PACK     = 4'd8;
+    localparam logic [3:0] MLDSA_PACK_BITS6_UNPACK   = 4'd9;
 
     localparam logic [2:0] MLDSA_FIPS_PACK_T1  = 3'd0;
     localparam logic [2:0] MLDSA_FIPS_PACK_T0  = 3'd1;
@@ -123,6 +125,7 @@ Verify:  EXPAND_A(15) → MATVEC_AZ(0C) → USE_HINT(0D) → PACK_W1_VERIFY(0E)
     localparam logic [7:0] MLDSA_UOP_SEED_EXPAND     = 8'h14;
     localparam logic [7:0] MLDSA_UOP_EXPAND_A        = 8'h15;
     localparam logic [7:0] MLDSA_UOP_HASH_MU         = 8'h16;
+    localparam logic [7:0] MLDSA_UOP_SAMPLE_S1S2     = 8'h17;
 
     function automatic int mldsa_level_index(input logic [1:0] level_sel);
         begin

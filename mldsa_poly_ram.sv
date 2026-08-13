@@ -294,12 +294,6 @@ module mldsa_poly_ram_pool4_backend #(
         end
     endgenerate
 `else
-    localparam int FPGA_POOL_DEPTH = POOLS * 512;
-    localparam int FPGA_POOL_ADDR_W = POOL_W + 9;
-
-    (* ram_style = "block" *) logic [47:0] pool_rd0_mem [0:FPGA_POOL_DEPTH-1];
-    (* ram_style = "block" *) logic [47:0] pool_rd1_mem [0:FPGA_POOL_DEPTH-1];
-
     function automatic logic [8:0] macro_addr_single(
         input logic [BANK_W-1:0] bank,
         input logic [7:0] addr
@@ -318,53 +312,86 @@ module mldsa_poly_ram_pool4_backend #(
         end
     endfunction
 
-    logic [POOL_W-1:0] wr_pool_sel;
-    logic [POOL_W-1:0] rd0_pool_sel;
-    logic [POOL_W-1:0] rd1_pool_sel;
-    logic [8:0]        wr_macro_addr;
-    logic [8:0]        rd0_macro_addr;
-    logic [8:0]        rd1_macro_addr;
-    logic [FPGA_POOL_ADDR_W-1:0] wr_mem_addr;
-    logic [FPGA_POOL_ADDR_W-1:0] rd0_mem_addr;
-    logic [FPGA_POOL_ADDR_W-1:0] rd1_mem_addr;
-    logic [47:0]       wr_word_data;
-    logic              write_active;
+    logic [POOL_W-1:0] rd0_pool_sel_c;
+    logic [POOL_W-1:0] rd1_pool_sel_c;
+    logic [POOL_W-1:0] pair_rd0_pool_sel_c;
+    logic [POOL_W-1:0] pair_rd1_pool_sel_c;
+    logic [POOL_W-1:0] wr_pool_sel_c;
+    logic [POOL_W-1:0] pair_wr_pool_sel_c;
+    logic [8:0]        rd0_macro_addr_c;
+    logic [8:0]        rd1_macro_addr_c;
+    logic [8:0]        wr_macro_addr_c;
+    logic [47:0]       wr_word_data_c;
 
     always_comb begin
-        write_active  = wr_en || pair_wr_en;
-        wr_pool_sel   = pair_wr_en ? pool_sel(pair_wr_bank) : pool_sel(wr_bank);
-        rd0_pool_sel  = pair_rd0_en ? pool_sel(pair_rd0_bank) : pool_sel(rd0_bank);
-        rd1_pool_sel  = pair_rd1_en ? pool_sel(pair_rd1_bank) : pool_sel(rd1_bank);
-        wr_macro_addr = pair_wr_en ? macro_addr_pair(pair_wr_bank, pair_wr_addr)
-                                   : macro_addr_single(wr_bank, wr_addr);
-        rd0_macro_addr = pair_rd0_en ? macro_addr_pair(pair_rd0_bank, pair_rd0_addr)
-                                     : macro_addr_single(rd0_bank, rd0_addr);
-        rd1_macro_addr = pair_rd1_en ? macro_addr_pair(pair_rd1_bank, pair_rd1_addr)
-                                     : macro_addr_single(rd1_bank, rd1_addr);
-        wr_mem_addr    = {wr_pool_sel,  wr_macro_addr};
-        rd0_mem_addr   = {rd0_pool_sel, rd0_macro_addr};
-        rd1_mem_addr   = {rd1_pool_sel, rd1_macro_addr};
-        wr_word_data = 48'd0;
+        rd0_pool_sel_c      = pool_sel(rd0_bank);
+        rd1_pool_sel_c      = pool_sel(rd1_bank);
+        pair_rd0_pool_sel_c = pool_sel(pair_rd0_bank);
+        pair_rd1_pool_sel_c = pool_sel(pair_rd1_bank);
+        wr_pool_sel_c       = pool_sel(wr_bank);
+        pair_wr_pool_sel_c  = pool_sel(pair_wr_bank);
+
+        rd0_macro_addr_c = pair_rd0_en ? macro_addr_pair(pair_rd0_bank, pair_rd0_addr)
+                                       : macro_addr_single(rd0_bank, rd0_addr);
+        rd1_macro_addr_c = pair_rd1_en ? macro_addr_pair(pair_rd1_bank, pair_rd1_addr)
+                                       : macro_addr_single(rd1_bank, rd1_addr);
+        wr_macro_addr_c  = pair_wr_en  ? macro_addr_pair(pair_wr_bank, pair_wr_addr)
+                                       : macro_addr_single(wr_bank, wr_addr);
+
+        wr_word_data_c = 48'd0;
         if (pair_wr_en) begin
-            wr_word_data = pair_wr_data;
+            wr_word_data_c = pair_wr_data;
         end else if (wr_en) begin
-            if (wr_addr[0]) wr_word_data = {wr_data, 24'd0};
-            else wr_word_data = {24'd0, wr_data};
+            if (wr_addr[0]) wr_word_data_c = {wr_data, 24'd0};
+            else wr_word_data_c = {24'd0, wr_data};
         end
     end
 
-    always_ff @(posedge clk) begin
-        if (write_active) begin
-            pool_rd0_mem[wr_mem_addr] <= wr_word_data;
-            pool_rd1_mem[wr_mem_addr] <= wr_word_data;
+    genvar fpga_pool_idx;
+    generate
+        for (fpga_pool_idx = 0; fpga_pool_idx < POOLS; fpga_pool_idx = fpga_pool_idx + 1) begin : g_fpga_pool
+            localparam logic [POOL_W-1:0] POOL_ID = POOL_W'(fpga_pool_idx);
+
+            (* ram_style = "block" *) logic [47:0] pool_rd0_mem [0:511];
+            (* ram_style = "block" *) logic [47:0] pool_rd1_mem [0:511];
+
+            logic        pool_rd0_en;
+            logic        pool_rd1_en;
+            logic        pool_pair_rd0_en;
+            logic        pool_pair_rd1_en;
+            logic        pool_wr_en;
+            logic        pool_pair_wr_en;
+            logic [47:0] rd0_word_q;
+            logic [47:0] rd1_word_q;
+
+            always_comb begin
+                pool_rd0_en      = rd0_en && (rd0_pool_sel_c == POOL_ID);
+                pool_rd1_en      = rd1_en && (rd1_pool_sel_c == POOL_ID);
+                pool_pair_rd0_en = pair_rd0_en && (pair_rd0_pool_sel_c == POOL_ID);
+                pool_pair_rd1_en = pair_rd1_en && (pair_rd1_pool_sel_c == POOL_ID);
+                pool_wr_en       = wr_en && (wr_pool_sel_c == POOL_ID);
+                pool_pair_wr_en  = pair_wr_en && (pair_wr_pool_sel_c == POOL_ID);
+            end
+
+            always_ff @(posedge clk) begin
+                if (pool_wr_en || pool_pair_wr_en) begin
+                    pool_rd0_mem[wr_macro_addr_c] <= wr_word_data_c;
+                    pool_rd1_mem[wr_macro_addr_c] <= wr_word_data_c;
+                end
+                if (!(pool_wr_en || pool_pair_wr_en) && (pool_rd0_en || pool_pair_rd0_en)) begin
+                    rd0_word_q <= pool_rd0_mem[rd0_macro_addr_c];
+                end
+                if (!(pool_wr_en || pool_pair_wr_en) && (pool_rd1_en || pool_pair_rd1_en)) begin
+                    rd1_word_q <= pool_rd1_mem[rd1_macro_addr_c];
+                end
+            end
+
+            always_comb begin
+                pool_rd0_word[fpga_pool_idx] = rd0_word_q;
+                pool_rd1_word[fpga_pool_idx] = rd1_word_q;
+            end
         end
-        if (!write_active && (rd0_en || pair_rd0_en)) begin
-            pool_rd0_word[rd0_pool_sel] <= pool_rd0_mem[rd0_mem_addr];
-        end
-        if (!write_active && (rd1_en || pair_rd1_en)) begin
-            pool_rd1_word[rd1_pool_sel] <= pool_rd1_mem[rd1_mem_addr];
-        end
-    end
+    endgenerate
 `endif
 
     always_ff @(posedge clk) begin

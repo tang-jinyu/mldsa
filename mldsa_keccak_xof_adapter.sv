@@ -173,7 +173,20 @@ module mldsa_keccak_xof_adapter (
                 buf_last <= 1'b0;
                 buf_last_pos <= 8'hff;
             end
-            if (prng_accept) begin
+            if (prng_accept && in_ready && in_valid) begin
+`ifdef MLDSA_DEBUG_DISPLAY
+                $display("XOF_ACCEPT data=%016x last=%0b last_pos=%02x mode=%0d",
+                         buf_data, buf_last, buf_last_pos, prng_i_mode);
+`endif
+                buf_valid <= 1'b1;
+                buf_data <= in_data;
+                buf_last <= in_last;
+                buf_last_pos <= in_last_pos;
+            end else if (prng_accept) begin
+`ifdef MLDSA_DEBUG_DISPLAY
+                $display("XOF_ACCEPT data=%016x last=%0b last_pos=%02x mode=%0d",
+                         buf_data, buf_last, buf_last_pos, prng_i_mode);
+`endif
                 buf_valid <= 1'b0;
             end else if (in_ready && in_valid) begin
                 buf_valid <= 1'b1;

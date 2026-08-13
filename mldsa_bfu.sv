@@ -121,12 +121,32 @@ module mldsa_bfu_pipe (
     logic [MLDSA_COEFF_W-1:0] a_d0;
     logic [MLDSA_COEFF_W-1:0] a_d1;
     logic [MLDSA_COEFF_W-1:0] a_d2;
+    logic [MLDSA_COEFF_W-1:0] a_d3;
+    logic [MLDSA_COEFF_W-1:0] a_d4;
     logic [MLDSA_COEFF_W-1:0] b_d0;
     logic [MLDSA_COEFF_W-1:0] b_d1;
     logic [MLDSA_COEFF_W-1:0] b_d2;
+    logic [MLDSA_COEFF_W-1:0] b_d3;
+    logic [MLDSA_COEFF_W-1:0] b_d4;
     logic                     inv_d0;
     logic                     inv_d1;
     logic                     inv_d2;
+    logic                     inv_d3;
+    logic                     inv_d4;
+
+`ifdef MLDSA_FPGA_REDUCE_PIPE2
+    wire [MLDSA_COEFF_W-1:0] a_aligned = a_d4;
+    wire [MLDSA_COEFF_W-1:0] b_aligned = b_d4;
+    wire                     inv_aligned = inv_d4;
+`elsif MLDSA_TARGET_FPGA
+    wire [MLDSA_COEFF_W-1:0] a_aligned = a_d3;
+    wire [MLDSA_COEFF_W-1:0] b_aligned = b_d3;
+    wire                     inv_aligned = inv_d3;
+`else
+    wire [MLDSA_COEFF_W-1:0] a_aligned = a_d2;
+    wire [MLDSA_COEFF_W-1:0] b_aligned = b_d2;
+    wire                     inv_aligned = inv_d2;
+`endif
 
 `ifdef MLDSA_NTT_FOLD_INTT_HALF
     function automatic logic [MLDSA_COEFF_W-1:0] modq_half(
@@ -159,12 +179,18 @@ module mldsa_bfu_pipe (
             a_d0      <= '0;
             a_d1      <= '0;
             a_d2      <= '0;
+            a_d3      <= '0;
+            a_d4      <= '0;
             b_d0      <= '0;
             b_d1      <= '0;
             b_d2      <= '0;
+            b_d3      <= '0;
+            b_d4      <= '0;
             inv_d0    <= 1'b0;
             inv_d1    <= 1'b0;
             inv_d2    <= 1'b0;
+            inv_d3    <= 1'b0;
+            inv_d4    <= 1'b0;
             out_valid <= 1'b0;
             a_out     <= '0;
             b_out     <= '0;
@@ -176,24 +202,30 @@ module mldsa_bfu_pipe (
             end
             a_d1   <= a_d0;
             a_d2   <= a_d1;
+            a_d3   <= a_d2;
+            a_d4   <= a_d3;
             b_d1   <= b_d0;
             b_d2   <= b_d1;
+            b_d3   <= b_d2;
+            b_d4   <= b_d3;
             inv_d1 <= inv_d0;
             inv_d2 <= inv_d1;
+            inv_d3 <= inv_d2;
+            inv_d4 <= inv_d3;
 
             out_valid <= mul_out_valid;
             if (mul_out_valid) begin
-                if (inv_d2) begin
+                if (inv_aligned) begin
 `ifdef MLDSA_NTT_FOLD_INTT_HALF
-                    a_out <= modq_half(modq_add(a_d2, b_d2));
+                    a_out <= modq_half(modq_add(a_aligned, b_aligned));
                     b_out <= modq_half(mul_result);
 `else
-                    a_out <= modq_add(a_d2, b_d2);
+                    a_out <= modq_add(a_aligned, b_aligned);
                     b_out <= mul_result;
 `endif
                 end else begin
-                    a_out <= modq_add(a_d2, mul_result);
-                    b_out <= modq_sub(a_d2, mul_result);
+                    a_out <= modq_add(a_aligned, mul_result);
+                    b_out <= modq_sub(a_aligned, mul_result);
                 end
             end
         end
